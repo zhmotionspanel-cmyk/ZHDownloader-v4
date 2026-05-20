@@ -336,8 +336,8 @@ class App:
         self._dl_items   = []                     # list[DLItem] for current batch
 
         root.title(f"{APP_NAME} v{APP_VERSION}")
-        root.geometry("860x720")
-        root.minsize(720, 560)
+        root.geometry("900x780")
+        root.minsize(760, 620)
         root.configure(bg=C_BG)
 
         self._build_ui()
@@ -367,8 +367,16 @@ class App:
         s.configure("Gold.TLabel", background=C_BG, foreground=C_GOLD,  font=("Helvetica",18,"bold"))
         s.configure("TCheckbutton",background=C_BG, foreground=C_MUTED, font=("Helvetica",10))
         s.map("TCheckbutton", background=[("active",C_BG)])
-        s.configure("TCombobox",   fieldbackground=C_SURFACE2, background=C_SURFACE2,
-                    foreground=C_TEXT, selectbackground=C_SURFACE2, selectforeground=C_GOLD)
+        s.configure("TCombobox",
+                    fieldbackground=C_SURFACE2, background=C_SURFACE,
+                    foreground=C_TEXT, selectbackground=C_MAROON,
+                    selectforeground=C_GOLD, insertcolor=C_TEXT,
+                    arrowcolor=C_GOLD, arrowsize=12)
+        s.map("TCombobox",
+              fieldbackground=[("readonly", C_SURFACE2), ("disabled", C_BG)],
+              foreground=[("readonly", C_TEXT), ("disabled", C_MUTED)],
+              selectbackground=[("readonly", C_MAROON)],
+              selectforeground=[("readonly", C_GOLD)])
         s.configure("Main.TButton",  background=C_GOLD, foreground=C_BG, font=("Helvetica",11,"bold"), padding=(16,8), borderwidth=0)
         s.map("Main.TButton",        background=[("active","#e8b84a"),("disabled","#3a3a2a")], foreground=[("disabled",C_MUTED)])
         s.configure("Ghost.TButton", background=C_SURFACE2, foreground=C_MUTED, font=("Helvetica",10), padding=(10,7), borderwidth=1, relief="flat")
@@ -405,7 +413,7 @@ class App:
         # URL
         tk.Label(left, text="URL  —  one per line (video, audio, or any file):",
                  bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).pack(anchor="w")
-        self.url_box = tk.Text(left, height=4, font=("Menlo",11),
+        self.url_box = tk.Text(left, height=3, font=("Menlo",11),
                                bg=C_SURFACE, fg=C_TEXT, insertbackground=C_GOLD,
                                relief="flat", highlightthickness=1,
                                highlightbackground=C_BORDER, highlightcolor=C_GOLD,
@@ -416,21 +424,33 @@ class App:
         opt = tk.Frame(left, bg=C_BG); opt.pack(fill="x", pady=(0,8))
 
         tk.Label(opt, text="Format:", bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).grid(row=0,column=0,sticky="w",padx=(0,6))
-        self.fmt_var = tk.StringVar(value=self.cfg.get("format","best_mp4"))
-        fmt_cb = ttk.Combobox(opt, textvariable=self.fmt_var, state="readonly", width=22,
-                              values=[f"{k}: {v['label']}" for k,v in FORMAT_OPTIONS.items()])
-        cur = self.fmt_var.get()
-        if cur in FORMAT_OPTIONS: fmt_cb.set(f"{cur}: {FORMAT_OPTIONS[cur]['label']}")
-        fmt_cb.grid(row=0,column=1,sticky="w",padx=(0,14))
-        fmt_cb.bind("<<ComboboxSelected>>", lambda e: self.fmt_var.set(fmt_cb.get().split(":")[0]))
+        self.fmt_var = tk.StringVar(value="best_mp4: Best Quality (MP4)")
+        fmt_opts = [f"{k}: {v['label']}" for k,v in FORMAT_OPTIONS.items()]
+        cur_key = self.cfg.get("format","best_mp4")
+        if cur_key in FORMAT_OPTIONS:
+            self.fmt_var.set(f"{cur_key}: {FORMAT_OPTIONS[cur_key]['label']}")
+        fmt_menu = tk.OptionMenu(opt, self.fmt_var, *fmt_opts)
+        fmt_menu.configure(bg=C_SURFACE2, fg=C_TEXT, activebackground=C_MAROON,
+                           activeforeground=C_GOLD, highlightthickness=0,
+                           font=("Helvetica",10), relief="flat", bd=1,
+                           width=26, anchor="w")
+        fmt_menu["menu"].configure(bg=C_SURFACE2, fg=C_TEXT,
+                                   activebackground=C_MAROON, activeforeground=C_GOLD,
+                                   font=("Helvetica",10))
+        fmt_menu.grid(row=0,column=1,sticky="w",padx=(0,14))
 
         tk.Label(opt, text="Mode:", bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).grid(row=0,column=2,sticky="w",padx=(0,6))
-        self.mode_var = tk.StringVar(value="auto")
-        mode_cb = ttk.Combobox(opt, textvariable=self.mode_var, state="readonly", width=14,
-                               values=["auto: Auto-detect", "video: Video/Audio", "file: General File"])
-        mode_cb.set("auto: Auto-detect")
-        mode_cb.grid(row=0,column=3,sticky="w")
-        mode_cb.bind("<<ComboboxSelected>>", lambda e: self.mode_var.set(mode_cb.get().split(":")[0]))
+        self.mode_var = tk.StringVar(value="auto: Auto-detect")
+        mode_opts = ["auto: Auto-detect", "video: Video/Audio", "file: General File"]
+        mode_menu = tk.OptionMenu(opt, self.mode_var, *mode_opts)
+        mode_menu.configure(bg=C_SURFACE2, fg=C_TEXT, activebackground=C_MAROON,
+                            activeforeground=C_GOLD, highlightthickness=0,
+                            font=("Helvetica",10), relief="flat", bd=1,
+                            width=16, anchor="w")
+        mode_menu["menu"].configure(bg=C_SURFACE2, fg=C_TEXT,
+                                    activebackground=C_MAROON, activeforeground=C_GOLD,
+                                    font=("Helvetica",10))
+        mode_menu.grid(row=0,column=3,sticky="w")
 
         # Checkboxes
         chk = tk.Frame(left, bg=C_BG); chk.pack(fill="x", pady=(0,8))
@@ -445,9 +465,15 @@ class App:
         ck = tk.Frame(left, bg=C_BG); ck.pack(fill="x", pady=(0,8))
         tk.Label(ck, text="Cookies:", bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).pack(side="left", padx=(0,6))
         self.cookies_var = tk.StringVar(value=self.cfg.get("cookies","none"))
-        cookies_cb = ttk.Combobox(ck, textvariable=self.cookies_var, state="readonly", width=12,
-                                  values=["none","chrome","safari","firefox","edge","brave"])
-        cookies_cb.pack(side="left")
+        cookies_opts = ["none","chrome","safari","firefox","edge","brave"]
+        cookies_menu = tk.OptionMenu(ck, self.cookies_var, *cookies_opts)
+        cookies_menu.configure(bg=C_SURFACE2, fg=C_TEXT, activebackground=C_MAROON,
+                               activeforeground=C_GOLD, highlightthickness=0,
+                               font=("Helvetica",10), relief="flat", bd=1, width=10)
+        cookies_menu["menu"].configure(bg=C_SURFACE2, fg=C_TEXT,
+                                       activebackground=C_MAROON, activeforeground=C_GOLD,
+                                       font=("Helvetica",10))
+        cookies_menu.pack(side="left")
         tk.Label(ck, text="(needed for private/member content)", bg=C_BG, fg=C_MUTED, font=("Helvetica",9)).pack(side="left", padx=(8,0))
 
         # Folder
@@ -509,7 +535,7 @@ class App:
         # ── Log ──
         log_sep = tk.Frame(left, bg=C_BORDER, height=1); log_sep.pack(fill="x", pady=(8,6))
         log_frame = tk.Frame(left, bg=C_BG); log_frame.pack(fill="x")
-        self.log_text = tk.Text(log_frame, height=6, font=("Menlo",9),
+        self.log_text = tk.Text(log_frame, height=5, font=("Menlo",10),
                                 bg="#0d0d0d", fg="#555555", relief="flat",
                                 padx=10, pady=6, wrap="word",
                                 state="disabled")
@@ -753,7 +779,7 @@ class App:
             messagebox.showwarning(APP_NAME, "Paste at least one URL."); return
         out = self.folder_var.get().strip() or DEFAULT_DIR
         Path(out).mkdir(parents=True, exist_ok=True)
-        fmt = self.fmt_var.get()
+        fmt = self.fmt_var.get().split(":")[0].strip()
         if fmt not in FORMAT_OPTIONS: fmt = "best_mp4"
         self.cfg.update({"download_dir": out, "format": fmt,
                          "clip_watch": self._clip_watch.get(),
@@ -876,7 +902,7 @@ class App:
             self.mq.put(("item_update", item))
             self.log(f"\n[{i+1}/{total}] {url}")
 
-            mode = self.mode_var.get()
+            mode = self.mode_var.get().split(":")[0].strip()
             kind = classify_url(url) if mode == "auto" else mode
 
             try:
