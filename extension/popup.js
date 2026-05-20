@@ -1,173 +1,185 @@
-// ZH Downloader — popup logic. Renders sniffed media list, handles filter, download, copy.
+// ZH Downloader v2 — popup script
 
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => document.querySelectorAll(s);
+let allItems = [];
+let currentTabId = null;
 
-let state = { tabId: null, items: [], filter: "all", pageUrl: "" };
+const listEl      = document.getElementById("item-list");
+const emptyEl     = document.getElementById("empty");
+const countEl     = document.getElementById("count");
+const searchEl    = document.getElementById("search");
+const filterEl    = document.getElementById("filter-type");
+const appStatusEl = document.getElementById("app-status");
+const appPingEl   = document.getElementById("app-ping");
 
-function fmtBytes(b) {
-  if (!b) return "";
-  const u = ["B", "KB", "MB", "GB"];
-  let i = 0; let n = b;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(n >= 10 ? 0 : 1)} ${u[i]}`;
-}
+// ── Init ──────────────────────────────────────────────────────────────────
 
-function audioOrVideo(t) {
-  if (t === "AUDIO") return "audio";
-  return "video";
-}
+document.addEventListener("DOMContentLoaded", () => {
+  loadItems();
+  pingApp();
+  setInterval(pingApp, 5000);
 
-function updateStats() {
-  const all = state.items.length;
-  const vid = state.items.filter((i) => ["MP4", "WEBM", "VIDEO", "STREAM"].includes(i.type)).length;
-  const aud = state.items.filter((i) => i.type === "AUDIO").length;
-  const str = state.items.filter((i) => ["HLS", "DASH"].includes(i.type)).length;
-  $("#countAll").textContent = all;
-  $("#countVideo").textContent = vid;
-  $("#countAudio").textContent = aud;
-  $("#countStream").textContent = str;
-}
+  searchEl.addEventListener("input", renderList);
+  filterEl.addEventListener("change", renderList);
 
-function render() {
-  updateStats();
-  const list = $("#list");
-  const filtered = state.filter === "all"
-    ? state.items
-    : state.items.filter((i) => i.type === state.filter);
-
-  if (!filtered.length) {
-    list.innerHTML = `
-      <div class="zh-empty">
-        <div class="zh-empty-icon">⬇</div>
-        <div class="zh-empty-title">${state.items.length ? "No matches" : "No media yet"}</div>
-        <div class="zh-empty-sub">${
-          state.items.length
-            ? "Try a different filter."
-            : "Play the video on this page. ZH Downloader will sniff it automatically."
-        }</div>
-      </div>`;
-    return;
-  }
-
-  list.innerHTML = filtered.map((item, i) => {
-    const size = fmtBytes(item.size);
-    const hostname = (() => { try { return new URL(item.url).hostname; } catch { return ""; } })();
-    const meta = [size, hostname, item.mime].filter(Boolean).join(" · ");
-    return `
-      <div class="zh-item" data-i="${i}">
-        <div class="zh-type ${item.type}">${item.type}</div>
-        <div class="zh-item-body">
-          <div class="zh-item-name" title="${escapeHtml(item.url)}">${escapeHtml(item.name || item.url)}</div>
-          <div class="zh-item-meta">${escapeHtml(meta)}</div>
-        </div>
-        <div class="zh-item-actions">
-          <button class="zh-copy-btn" data-action="copy" data-url="${escapeHtml(item.url)}">⎘</button>
-          <button class="zh-dl-btn" data-action="dl" data-i="${state.items.indexOf(item)}">⬇</button>
-        </div>
-      </div>`;
-  }).join("");
-
-  list.querySelectorAll("[data-action=copy]").forEach((b) =>
-    b.addEventListener("click", () => copyUrl(b.dataset.url))
-  );
-  list.querySelectorAll("[data-action=dl]").forEach((b) =>
-    b.addEventListener("click", () => downloadItem(parseInt(b.dataset.i, 10)))
-  );
-}
-
-function escapeHtml(s) {
-  return String(s || "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
-}
-
-function toast(msg) {
-  const t = document.createElement("div");
-  t.className = "zh-toast";
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 1800);
-}
-
-async function copyUrl(url) {
-  try {
-    await navigator.clipboard.writeText(url);
-    toast("URL copied");
-  } catch {
-    toast("Copy failed");
-  }
-}
-
-function downloadItem(i) {
-  const item = state.items[i];
-  if (!item) return;
-  chrome.runtime.sendMessage({ type: "ZH_DOWNLOAD", item }, async (res) => {
-    if (!res) { toast("Download failed"); return; }
-    if (res.copied && res.hint === "hls") {
-      // For HLS, copy page URL instead — desktop app handles via yt-dlp
-      try {
-        await navigator.clipboard.writeText(state.pageUrl || item.url);
-        toast("Page URL copied — paste in desktop app");
-      } catch {
-        toast("HLS stream — use 'Copy Page URL' button");
-      }
-    }
-    else if (res.ok) toast("Download started");
-    else toast("Failed: " + (res.err || "unknown"));
+  document.getElementById("btn-clear").addEventListener("click", () => {
+    if (!currentTabId) return;
+    chrome.runtime.sendMessage({ type: "ZH_CLEAR", tabId: currentTabId });
+    allItems = [];
+    renderList();
   });
-}
 
-function loadTab() {
-  chrome.runtime.sendMessage({ type: "ZH_GET_TAB" }, (res) => {
+  document.getElementById("btn-page-url").addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "ZH_PAGE_URL" }, res => {
+      showStatus(res?.ok ? "✓ Sent page URL to ZH Downloader app!" : "✗ App not running — open ZH Downloader first", res?.ok);
+    });
+  });
+});
+
+// ── Load items from background ────────────────────────────────────────────
+
+function loadItems() {
+  chrome.runtime.sendMessage({ type: "ZH_GET_TAB" }, res => {
     if (!res) return;
-    state.tabId = res.tabId;
-    state.items = res.items || [];
-    state.pageUrl = res.url || "";
-    $("#pageTitle").textContent = res.title || res.url || "—";
-    render();
+    currentTabId = res.tabId;
+    allItems     = res.items || [];
+    renderList();
   });
 }
 
-// Listen for live updates from background.
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === "ZH_MEDIA_UPDATED" && msg.tabId === state.tabId) {
-    state.items = msg.items;
-    render();
+// Listen for live updates
+chrome.runtime.onMessage.addListener(msg => {
+  if (msg.type === "ZH_UPDATED" && msg.tabId === currentTabId) {
+    allItems = msg.items || [];
+    renderList();
   }
 });
 
-// Filter chips
-$$(".zh-chip").forEach((c) =>
-  c.addEventListener("click", () => {
-    $$(".zh-chip").forEach((x) => x.classList.remove("active"));
-    c.classList.add("active");
-    state.filter = c.dataset.filter;
-    render();
-  })
-);
+// ── Render ────────────────────────────────────────────────────────────────
 
-$("#refreshBtn").addEventListener("click", loadTab);
-$("#clearBtn").addEventListener("click", () => {
-  if (state.tabId == null) return;
-  chrome.runtime.sendMessage({ type: "ZH_CLEAR", tabId: state.tabId });
-  state.items = [];
-  render();
-  toast("Cleared");
-});
-$("#openDesktopHelp").addEventListener("click", (e) => {
-  e.preventDefault();
-  toast("Run the ZH Downloader .app / .exe — paste any URL there");
-});
+function renderList() {
+  const q    = searchEl.value.trim().toLowerCase();
+  const type = filterEl.value;
 
-$("#copyPageBtn").addEventListener("click", async () => {
-  if (!state.pageUrl) { toast("No page URL"); return; }
+  const filtered = allItems.filter(item => {
+    if (type !== "all" && item.type !== type) return false;
+    if (q && !item.name.toLowerCase().includes(q) && !item.url.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  listEl.innerHTML = "";
+  emptyEl.style.display = filtered.length === 0 ? "block" : "none";
+  countEl.textContent   = `${filtered.length} item${filtered.length !== 1 ? "s" : ""}`;
+
+  filtered.forEach(item => {
+    const li  = document.createElement("li");
+    li.className = "item";
+
+    const isStream = item.type === "HLS" || item.type === "DASH" || item.type === "STREAM";
+    const isVideo  = ["MP4","WEBM","MKV","VIDEO","HLS","DASH","STREAM"].includes(item.type);
+
+    // Badge
+    const badge = document.createElement("span");
+    badge.className  = `type-badge badge-${item.type}`;
+    badge.textContent = item.type;
+
+    // Info
+    const info     = document.createElement("div");
+    info.className = "item-info";
+    const name     = document.createElement("span");
+    name.className = "item-name";
+    name.title     = item.url;
+    name.textContent = item.name || shortUrl(item.url);
+    const meta     = document.createElement("span");
+    meta.className = "item-meta";
+    meta.textContent = [item.sizeStr, item.source === "dom" ? "DOM" : "Network"].filter(Boolean).join(" · ");
+
+    info.appendChild(name);
+    info.appendChild(meta);
+
+    // Actions
+    const actions = document.createElement("div");
+    actions.className = "item-actions";
+
+    if (isStream || isVideo) {
+      // Send to desktop app
+      const btnApp = document.createElement("button");
+      btnApp.className   = "btn-app";
+      btnApp.textContent = "📤 App";
+      btnApp.title       = "Send to ZH Downloader desktop app";
+      btnApp.onclick     = () => {
+        chrome.runtime.sendMessage({ type: "ZH_SEND_TO_APP", url: item.url }, res => {
+          showStatus(res?.ok ? `✓ Sent to app!` : "✗ App not running", res?.ok);
+        });
+      };
+      actions.appendChild(btnApp);
+    }
+
+    if (!isStream) {
+      // Direct download
+      const btnDl = document.createElement("button");
+      btnDl.className   = "btn-dl";
+      btnDl.textContent = "⬇ Save";
+      btnDl.title       = "Download via browser";
+      btnDl.onclick     = () => {
+        chrome.runtime.sendMessage({ type: "ZH_DOWNLOAD", item }, res => {
+          if (res?.ok) showStatus("✓ Download started!", true);
+          else showStatus("✗ Download failed: " + (res?.err||""), false);
+        });
+      };
+      actions.appendChild(btnDl);
+    }
+
+    // Copy URL
+    const btnCopy = document.createElement("button");
+    btnCopy.className   = "btn-copy";
+    btnCopy.textContent = "🔗";
+    btnCopy.title       = "Copy URL";
+    btnCopy.onclick     = () => {
+      navigator.clipboard.writeText(item.url).then(() => {
+        btnCopy.textContent = "✓";
+        setTimeout(() => btnCopy.textContent = "🔗", 1500);
+      });
+    };
+    actions.appendChild(btnCopy);
+
+    li.appendChild(badge);
+    li.appendChild(info);
+    li.appendChild(actions);
+    listEl.appendChild(li);
+  });
+}
+
+// ── App ping ──────────────────────────────────────────────────────────────
+
+async function pingApp() {
   try {
-    await navigator.clipboard.writeText(state.pageUrl);
-    toast("Page URL copied — paste in desktop app");
+    const r = await fetch("http://127.0.0.1:9613/ping", { signal: AbortSignal.timeout(1500) });
+    const d = await r.json();
+    appPingEl.className   = "ping-ok";
+    appPingEl.textContent = `● App v${d.version}`;
   } catch {
-    toast("Copy failed");
+    appPingEl.className   = "ping-err";
+    appPingEl.textContent = "● App offline";
   }
-});
+}
 
-loadTab();
+// ── Status toast ──────────────────────────────────────────────────────────
+
+let statusTimer;
+function showStatus(msg, ok) {
+  appStatusEl.textContent = msg;
+  appStatusEl.className   = "app-status show " + (ok ? "ok" : "err");
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => {
+    appStatusEl.className = "app-status";
+  }, 3000);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+function shortUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname + u.pathname.slice(0,40);
+  } catch { return url.slice(0,60); }
+}

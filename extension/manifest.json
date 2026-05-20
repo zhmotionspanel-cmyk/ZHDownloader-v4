@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "ZH Downloader",
-  "version": "1.0.0",
-  "description": "Sniff and download videos from 1800+ sites. ZH Motions internal tool.",
+  "version": "2.0.0",
+  "description": "One-click download for videos, audio, and any file. ZH Motions internal tool.",
   "author": "ZH Motions",
   "icons": {
     "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
@@ -36,8 +37,9 @@
     "activeTab",
     "tabs",
     "scripting",
-    "notifications"
+    "notifications",
+    "webNavigation"
   ],
-  "host_permissions": ["<all_urls>", "http://127.0.0.1:9613/*", "http://localhost:9613/*"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:9613/*"],
   "minimum_chrome_version": "100"
 }
