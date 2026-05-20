@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ZH Downloader</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="zh-head">
+    <div class="zh-brand">
+      <span class="zh-dot"></span>
+      <div>
+        <div class="zh-title">ZH Downloader</div>
+        <div class="zh-sub" id="pageTitle">—</div>
+      </div>
+    </div>
+    <div class="zh-actions">
+      <button id="refreshBtn" class="zh-icon-btn" title="Refresh">↻</button>
+      <button id="clearBtn" class="zh-icon-btn" title="Clear list">⌫</button>
+    </div>
+  </header>
+
+  <div class="zh-stats">
+    <div class="zh-stat"><span id="countAll">0</span><label>Found</label></div>
+    <div class="zh-stat"><span id="countVideo">0</span><label>Video</label></div>
+    <div class="zh-stat"><span id="countAudio">0</span><label>Audio</label></div>
+    <div class="zh-stat"><span id="countStream">0</span><label>HLS/DASH</label></div>
+  </div>
+
+  <div class="zh-pageurl">
+    <button id="copyPageBtn" class="zh-page-btn">
+      <span class="zh-page-icon">📋</span>
+      <span class="zh-page-text">
+        <strong>Copy Page URL</strong>
+        <em>For protected/signed videos — paste in desktop app</em>
+      </span>
+    </button>
+  </div>
+
+  <div class="zh-filter">
+    <button class="zh-chip active" data-filter="all">All</button>
+    <button class="zh-chip" data-filter="MP4">MP4</button>
+    <button class="zh-chip" data-filter="WEBM">WEBM</button>
+    <button class="zh-chip" data-filter="HLS">HLS</button>
+    <button class="zh-chip" data-filter="DASH">DASH</button>
+    <button class="zh-chip" data-filter="AUDIO">Audio</button>
+  </div>
+
+  <main class="zh-list" id="list">
+    <div class="zh-empty">
+      <div class="zh-empty-icon">⬇</div>
+      <div class="zh-empty-title">No media yet</div>
+      <div class="zh-empty-sub">Play the video on this page. ZH Downloader will sniff it automatically.</div>
+    </div>
+  </main>
+
+  <footer class="zh-foot">
+    <span class="zh-foot-left">ZH Motions · Internal Tool</span>
+    <a href="#" id="openDesktopHelp" class="zh-foot-link">Use Desktop App</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

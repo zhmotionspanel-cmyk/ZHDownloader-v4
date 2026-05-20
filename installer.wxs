@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ZH Downloader — Windows MSI installer (WiX Toolset 3.x)
+  Builds professional Windows installer with Start Menu entry, uninstaller,
+  author metadata, version, and license display.
+
+  Build (Windows + WiX installed):
+    candle.exe -arch x64 -dAppName="ZH Downloader" -dAppVersion=1.1.0 ^
+               -dAppAuthor="ZH Motions" -dExePath="dist\ZHDownloader.exe" ^
+               -dIconPath="assets\AppIcon.ico" -out dist\installer.wixobj installer.wxs
+    light.exe  -ext WixUIExtension -out dist\ZHDownloader-Setup.msi dist\installer.wixobj
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <!-- Stable UpgradeCode — never change; lets future versions replace old ones -->
+  <Product Id="*"
+           Name="$(var.AppName)"
+           Language="1033"
+           Version="$(var.AppVersion)"
+           Manufacturer="$(var.AppAuthor)"
+           UpgradeCode="A1B2C3D4-1234-5678-9ABC-ZH00MOTIONS01">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="$(var.AppName) — personal video grabber for 1800+ sites"
+             Comments="Built by $(var.AppAuthor) for ZH Motions students."
+             Manufacturer="$(var.AppAuthor)" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of $(var.AppName) is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- App icon shown in Add/Remove Programs -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://zhmotions.com" />
+    <Property Id="ARPURLINFOABOUT" Value="https://zhmotions.com" />
+    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
+    <Property Id="ARPNOMODIFY" Value="yes" Secure="yes" />
+
+    <!-- Install layout -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="$(var.AppName)">
+          <Component Id="MainExecutable" Guid="*" Win64="yes">
+            <File Id="AppExe"
+                  Source="$(var.ExePath)"
+                  KeyPath="yes"
+                  Checksum="yes">
+              <Shortcut Id="StartMenuShortcut"
+                        Directory="ApplicationProgramsFolder"
+                        Name="$(var.AppName)"
+                        Description="Personal video grabber"
+                        WorkingDirectory="INSTALLFOLDER"
+                        Icon="AppIcon.ico"
+                        IconIndex="0"
+                        Advertise="yes" />
+              <Shortcut Id="DesktopShortcut"
+                        Directory="DesktopFolder"
+                        Name="$(var.AppName)"
+                        Description="Personal video grabber"
+                        WorkingDirectory="INSTALLFOLDER"
+                        Icon="AppIcon.ico"
+                        IconIndex="0"
+                        Advertise="yes" />
+            </File>
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="$(var.AppName)">
+          <Component Id="StartMenuFolderEntry" Guid="*">
+            <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+            <RegistryValue Root="HKCU"
+                           Key="Software\ZHMotions\ZHDownloader"
+                           Name="installed"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <Feature Id="MainFeature" Title="$(var.AppName)" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="StartMenuFolderEntry" />
+    </Feature>
+
+    <!-- Standard wizard UI -->
+    <UIRef Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <!-- Launch app after install (optional) -->
+    <Property Id="WixShellExecTarget" Value="[#AppExe]" />
+    <CustomAction Id="LaunchApp"
+                  BinaryKey="WixCA"
+                  DllEntry="WixShellExec"
+                  Impersonate="yes" />
+
+  </Product>
+</Wix>
