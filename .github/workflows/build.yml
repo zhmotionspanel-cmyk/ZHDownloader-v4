@@ -1,4 +1,4 @@
-name: Build — Windows EXE/MSI + macOS DMG/PKG
+name: Build — Windows EXE + macOS DMG/PKG
 
 on:
   push:
@@ -10,81 +10,107 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install ffmpeg
         run: choco install ffmpeg -y --no-progress
-      - name: Install WiX Toolset
-        run: choco install wixtoolset -y --no-progress
+
       - name: Locate ffmpeg path
         id: ffmpeg
         shell: pwsh
         run: |
           $ff = (Get-Command ffmpeg).Source
           echo "path=$ff" >> $env:GITHUB_OUTPUT
+
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+
       - name: Build EXE
-        run: >
-          pyinstaller
-          --noconfirm --clean --windowed --onefile
-          --name "ZHDownloader"
-          --icon "assets\AppIcon.ico"
-          --version-file "assets\version_info.txt"
-          --add-data "assets;assets"
-          --add-binary "${{ steps.ffmpeg.outputs.path }};."
-          zh_downloader.py
-      - name: Build MSI
         shell: pwsh
         run: |
-          $WIX = (Get-ChildItem 'C:\Program Files (x86)\WiX Toolset*' | Select-Object -First 1).FullName + '\bin'
-          $env:Path = "$WIX;$env:Path"
-          candle.exe -nologo -arch x64 -dAppName="ZH Downloader" -dAppVersion=1.1.0 -dAppAuthor="ZH Motions" -dExePath="dist\ZHDownloader.exe" -dIconPath="assets\AppIcon.ico" -out dist\installer.wixobj installer.wxs
-          light.exe -nologo -ext WixUIExtension -cultures:en-us -out "dist\ZHDownloader-Setup.msi" dist\installer.wixobj
-      - uses: actions/upload-artifact@v4
+          pyinstaller `
+            --noconfirm --clean --windowed --onefile `
+            --name "ZHDownloader" `
+            --icon "assets\AppIcon.ico" `
+            --version-file "assets\version_info.txt" `
+            --add-data "assets;assets" `
+            --add-binary "${{ steps.ffmpeg.outputs.path }};." `
+            zh_downloader.py
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
         with:
           name: ZHDownloader-Windows-EXE
           path: dist/ZHDownloader.exe
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ZHDownloader-Windows-MSI
-          path: dist/ZHDownloader-Setup.msi
 
   build-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Python with tkinter
         run: |
           brew install python-tk@3.12 || true
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
+
       - name: Install ffmpeg
         run: brew install ffmpeg
+
       - name: Install Python deps
         run: |
           python3.12 -m pip install --upgrade pip
           python3.12 -m pip install -r requirements.txt
           python3.12 -m pip install pyinstaller
+
       - name: Build .app
         run: |
           FFMPEG_BIN="$(command -v ffmpeg)"
-          python3.12 -m PyInstaller --noconfirm --clean --windowed --name "ZH Downloader" --osx-bundle-identifier "com.zhmotions.downloader" --icon "assets/AppIcon.icns" --add-data "assets:assets" --add-binary "$FFMPEG_BIN:." zh_downloader.py
+          python3.12 -m PyInstaller \
+            --noconfirm --clean --windowed \
+            --name "ZH Downloader" \
+            --osx-bundle-identifier "com.zhmotions.downloader" \
+            --icon "assets/AppIcon.icns" \
+            --add-data "assets:assets" \
+            --add-binary "$FFMPEG_BIN:." \
+            zh_downloader.py
+
       - name: Build .dmg
         run: |
           brew install create-dmg || true
-          create-dmg --volname "ZH Downloader" --window-size 540 360 --icon-size 100 --icon "ZH Downloader.app" 140 180 --app-drop-link 400 180 --no-internet-enable "ZHDownloader-macOS.dmg" "dist/ZH Downloader.app" || (STAGE=$(mktemp -d) && cp -R "dist/ZH Downloader.app" "$STAGE/" && ln -s /Applications "$STAGE/Applications" && hdiutil create -volname "ZH Downloader" -srcfolder "$STAGE" -ov -format UDZO "ZHDownloader-macOS.dmg")
+          create-dmg \
+            --volname "ZH Downloader" \
+            --window-size 540 360 \
+            --icon-size 100 \
+            --icon "ZH Downloader.app" 140 180 \
+            --app-drop-link 400 180 \
+            --no-internet-enable \
+            "ZHDownloader-macOS.dmg" \
+            "dist/ZH Downloader.app" || {
+              STAGE=$(mktemp -d)
+              cp -R "dist/ZH Downloader.app" "$STAGE/"
+              ln -s /Applications "$STAGE/Applications"
+              hdiutil create -volname "ZH Downloader" -srcfolder "$STAGE" -ov -format UDZO "ZHDownloader-macOS.dmg"
+            }
+
       - name: Build .pkg
         run: |
           PKG_ROOT=$(mktemp -d)
           mkdir -p "$PKG_ROOT/Applications"
           cp -R "dist/ZH Downloader.app" "$PKG_ROOT/Applications/"
           COMP_DIR=$(mktemp -d)
-          pkgbuild --root "$PKG_ROOT" --identifier "com.zhmotions.downloader" --version "1.1.0" --install-location "/" "$COMP_DIR/component.pkg"
-          cat > "$COMP_DIR/dist.xml" << 'EOF'
+          pkgbuild \
+            --root "$PKG_ROOT" \
+            --identifier "com.zhmotions.downloader" \
+            --version "1.1.0" \
+            --install-location "/" \
+            "$COMP_DIR/component.pkg"
+          cat > "$COMP_DIR/dist.xml" << 'DISTEOF'
           <?xml version="1.0" encoding="utf-8"?>
           <installer-gui-script minSpecVersion="2">
             <title>ZH Downloader</title>
@@ -95,13 +121,21 @@ jobs:
             <choice id="com.zhmotions.downloader" visible="false"><pkg-ref id="com.zhmotions.downloader"/></choice>
             <pkg-ref id="com.zhmotions.downloader" version="1.1.0" onConclusion="none">component.pkg</pkg-ref>
           </installer-gui-script>
-          EOF
-          productbuild --distribution "$COMP_DIR/dist.xml" --package-path "$COMP_DIR" --version "1.1.0" "ZHDownloader-macOS.pkg"
-      - uses: actions/upload-artifact@v4
+          DISTEOF
+          productbuild \
+            --distribution "$COMP_DIR/dist.xml" \
+            --package-path "$COMP_DIR" \
+            --version "1.1.0" \
+            "ZHDownloader-macOS.pkg"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
         with:
           name: ZHDownloader-macOS-DMG
           path: ZHDownloader-macOS.dmg
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload PKG
+        uses: actions/upload-artifact@v4
         with:
           name: ZHDownloader-macOS-PKG
           path: ZHDownloader-macOS.pkg
