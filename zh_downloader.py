@@ -949,14 +949,19 @@ class App:
     def _ydl_opts(self, out, fk, item, url=""):
         f = FMTS[fk]
         # HLS/stream URLs: use simple format (codec filters break HLS)
-        is_hls = bool(url and (
-            ".m3u8" in url.lower() or "hls" in url.lower() or
-            "artlist.io" in url.lower() or "artgrid.io/content" in url.lower() or
-            "akamaized.net" in url.lower() or "cloudfront.net" in url.lower() or
-            "cms-public" in url.lower()
+        url_l = url.lower() if url else ""
+        is_youtube = any(h in url_l for h in ("youtube.com","youtu.be"))
+        is_hls     = bool(url and not is_youtube and (
+            ".m3u8" in url_l or "hls" in url_l or
+            "artlist.io" in url_l or "akamaized.net" in url_l or
+            "cloudfront.net" in url_l or "cms-public" in url_l
         ))
         if is_hls:
-            chosen = "best/bestvideo+bestaudio/bestaudio"
+            chosen = "best"
+        elif is_youtube:
+            # YouTube: pick format based on quality setting
+            fk_key = fk.split(":")[0].strip() if ":" in fk else fk
+            chosen = f["fmt"]
         elif not self.ff and "fb" in f:
             chosen = f.get("fb", f["fmt"])
         else:
@@ -985,16 +990,26 @@ class App:
             elif s=="finished":
                 item.pct=100; self._mq.put(("item_up",item))
                 self._mq.put(("status",f"[{item.idx}/{item.total}] Processing..."))
-                fn = d.get("filename") or (d.get("info_dict") or {}).get("filepath")
+                # Get filename from multiple sources
+                fn = (d.get("filename") or
+                      (d.get("info_dict") or {}).get("filepath") or
+                      (d.get("info_dict") or {}).get("_filename") or "")
                 if fn and fn not in self._done_files:
                     self._done_files.append(fn)
                     item.done_f = fn
+                    # Update item name display with actual filename
+                    item.name = Path(fn).name[:80] if fn else item.name
+                    self._mq.put(("item_up", item))
 
         opts = {
             "format":                     chosen,
-            "outtmpl":                    str(Path(out)/"%(title).60s.%(ext)s"),
+            "outtmpl": {
+                "default": str(Path(out)/"%(title).100s.%(ext)s"),
+                "chapter": str(Path(out)/"%(title).80s - %(section_title)s.%(ext)s"),
+            },
             "restrictfilenames":          False,
             "windowsfilenames":           False,
+            "trim_file_name":             80,
             "noplaylist":                 not self.pl_var.get(),
             "writesubtitles":             self.sub_var.get(),
             "writeautomaticsub":          self.sub_var.get(),
@@ -1008,7 +1023,11 @@ class App:
                 "youtube": {
                     "player_client": ["web", "android", "ios"],
                 },
+                "youtubetab": {
+                    "skip": ["authcheck"],
+                },
             },
+            "youtube_include_dash_manifest": True,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -1030,7 +1049,15 @@ class App:
         ck = self.ck_var.get()
         if ck and ck!="none": opts["cookiesfrombrowser"]=(ck,)
         if "merge" in f and not is_hls: opts["merge_output_format"]=f["merge"]
-        if is_hls: opts["merge_output_format"]="mp4"
+        if is_hls:
+            opts["merge_output_format"] = "mp4"
+            if self.ff:
+                opts["postprocessors"] = [{"key":"FFmpegVideoConvertor","preferedformat":"mp4"}]
+                opts["postprocessor_args"] = {"ffmpeg": [
+                    "-c:v","libx264","-preset","fast","-crf","18",
+                    "-c:a","aac","-b:a","256k",
+                    "-movflags","+faststart","-pix_fmt","yuv420p"
+                ]}
         if "audio" in f:
             opts["postprocessors"]=[{"key":"FFmpegExtractAudio",
                                      "preferredcodec":f["audio"],"preferredquality":"0"}]
@@ -1113,6 +1140,7 @@ class App:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
             # Rename UUID-based filenames to something readable
+            # Always try to rename generic/UUID filenames
             if item.done_f:
                 self._rename_if_uuid(item, url)
             if not self._stop.is_set():
@@ -1132,33 +1160,49 @@ class App:
             self._mq.put(("item_up",item))
 
     def _rename_if_uuid(self, item, url):
-        """Rename UUID-based filenames to readable names."""
-        import re, urllib.parse
+        """Rename UUID/generic filenames to readable names from URL."""
+        import re as _re, urllib.parse as _up
         if not item.done_f: return
         p = Path(item.done_f)
         if not p.exists(): return
-        # Check if name looks like UUID
         name = p.stem
-        uuid_pat = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-", re.I)
-        if not uuid_pat.match(name): return
-        # Get readable name from URL
+        uuid_pat = _re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-", _re.I)
+        generic = {"footage","video","clip","download","file","media",
+                   "stream","playlist","index","master","unknown"}
+        if not uuid_pat.match(name) and name.lower() not in generic:
+            return
         try:
-            path_parts = urllib.parse.unquote(urllib.parse.urlparse(url).path)
-            slug = [x for x in path_parts.split("/") if x and not uuid_pat.match(x)]
-            new_name = slug[-1] if slug else "download"
+            parsed   = _up.urlparse(url)
+            path_dec = _up.unquote(parsed.path)
+            slugs    = [x for x in path_dec.split("/")
+                        if x and len(x) > 3
+                        and not uuid_pat.match(x)
+                        and not x.endswith(".m3u8")
+                        and not x.endswith(".mpd")
+                        and not x.endswith(".ts")]
+            qs       = _up.parse_qs(parsed.query)
+            title_q  = qs.get("title", qs.get("name", qs.get("filename", [])))
+            if title_q:
+                new_name = title_q[0]
+            elif slugs:
+                new_name = max(slugs, key=lambda s: len(s.replace("-"," ").split()))
+            else:
+                return
         except:
-            new_name = "download"
-        # Clean name
-        new_name = re.sub(r"[^a-zA-Z0-9_ -]", "", new_name).strip()[:60] or "download"
+            return
+        new_name = _re.sub("[^a-zA-Z0-9 _-]", " ", new_name)
+        new_name = _re.sub(" +", " ", new_name).strip()[:60]
+        if not new_name or len(new_name) < 3: return
         new_path = p.parent / f"{new_name}{p.suffix}"
-        # Avoid overwrite
-        counter = 1
+        counter  = 1
         while new_path.exists() and new_path != p:
-            new_path = p.parent / f"{new_name}_{counter}{p.suffix}"
+            new_path = p.parent / f"{new_name} ({counter}){p.suffix}"
             counter += 1
         try:
             p.rename(new_path)
             item.done_f = str(new_path)
+            item.name   = new_path.name
+            self._mq.put(("item_up", item))
             self.log(f"[rename] {p.name} -> {new_path.name}")
         except Exception as e:
             self.log(f"[warn] rename failed: {e}")
@@ -1187,22 +1231,35 @@ class App:
         self._mq.put(("spd",0))
         done = sum(1 for it in self._items if it.status=="done")
         err  = sum(1 for it in self._items if it.status=="error")
-        msg  = f"? {done} done"
-        if err:    msg+=f"  -  {err} error"
-        if self._paused: msg+="  -  paused (resume available)"
+        msg  = f"Done: {done} downloaded"
+        if err:    msg+=f"  |  {err} error"
+        if self._paused: msg+="  |  paused"
         self._mq.put(("status",msg))
         self.prog_bar["value"]=100 if not self._paused else self.prog_bar["value"]
         if self._paused:
             q=self.state.get("queue",[])
             if q:
-                self.res_lbl.configure(text=f"?  {len(q)} paused")
+                self.res_lbl.configure(text=f"Paused: {len(q)} items")
                 self.res_frame.pack(fill="x",padx=20,pady=(0,8))
         n=len(self._done_files)
         if n>0:
-            self._notify(f"? {n} file{'s' if n>1 else ''} downloaded",
+            self._notify(f"Done: {n} file{'s' if n>1 else ''} downloaded",
                          Path(self._done_files[0]).name)
             try: self.root.bell()
             except: pass
+        # Auto-clear URL box and log after successful download
+        if done > 0 and err == 0 and not self._paused:
+            self.root.after(1500, self._auto_clear)
+
+    def _auto_clear(self):
+        """Auto-clear URL box and log after successful download."""
+        # Clear URL box
+        self.url_box.delete("1.0","end")
+        # Clear log
+        self.log_txt.configure(state="normal")
+        self.log_txt.delete("1.0","end")
+        self.log_txt.configure(state="disabled")
+        self.log("[info] Ready for next download.")
 
     def _notify(self, title, body):
         try:
