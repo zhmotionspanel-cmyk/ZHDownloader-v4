@@ -481,9 +481,9 @@ class App:
 
         # Action buttons
         btns = tk.Frame(pad, bg=BG); btns.pack(fill="x", padx=20, pady=(0,10))
-        self.btn_dl     = ttk.Button(btns, text="?  Download",  style="Main.TButton", command=self._start)
-        self.btn_pause  = ttk.Button(btns, text="?  Pause",    style="Ghost.TButton", command=self._do_pause,  state="disabled")
-        self.btn_cancel = ttk.Button(btns, text="?  Cancel",   style="Ghost.TButton", command=self._do_cancel, state="disabled")
+        self.btn_dl     = ttk.Button(btns, text="Download",  style="Main.TButton", command=self._start)
+        self.btn_pause  = ttk.Button(btns, text="Pause",    style="Ghost.TButton", command=self._do_pause,  state="disabled")
+        self.btn_cancel = ttk.Button(btns, text="Cancel",   style="Ghost.TButton", command=self._do_cancel, state="disabled")
         self.btn_dl.pack(side="left", padx=(0,8))
         self.btn_pause.pack(side="left", padx=(0,6))
         self.btn_cancel.pack(side="left")
@@ -504,7 +504,7 @@ class App:
         self._sched_lbl = tk.Label(sched_row, text="", bg=BG, fg="#ff8c42",
                                    font=("Helvetica",10,"bold"))
         self._sched_lbl.pack(side="left", padx=(12,0))
-        ttk.Button(sched_row, text="? Clear schedule", style="Ghost.TButton",
+        ttk.Button(sched_row, text="Clear schedule", style="Ghost.TButton",
                    command=self._clear_sched).pack(side="right")
 
         # Resume banner
@@ -785,7 +785,7 @@ class App:
                 self.log(f"[bridge] already queued: {url[:60]}")
             return
 
-        # Not running — add and start
+        # Not running - add and start
         cur = self.url_box.get("1.0","end").strip()
         if url not in cur:
             self.url_box.delete("1.0","end")
@@ -833,7 +833,7 @@ class App:
         self._sched_time = None
         self._sched_var.set("Now")
         self._sched_lbl.configure(text="")
-        self.btn_dl.configure(state="normal", text="?  Download")
+        self.btn_dl.configure(state="normal", text="Download")
         self.log("[schedule] cleared")
 
     def _get_sched_delay(self):
@@ -872,7 +872,7 @@ class App:
             self._sched_lbl.configure(text="Starting now...")
             self._sched_timer = None
             self._sched_time  = None
-            self.btn_dl.configure(state="disabled", text="?  Download")
+            self.btn_dl.configure(state="disabled", text="Download")
             self._do_start(urls, out, fk)
         else:
             self._sched_lbl.configure(text=f"? Starting in {self._fmt_countdown(remaining)}")
@@ -901,7 +901,7 @@ class App:
             if self._sched_timer:
                 self.root.after_cancel(self._sched_timer)
             target = datetime.datetime.now() + datetime.timedelta(seconds=delay)
-            self.btn_dl.configure(state="disabled", text="? Scheduled")
+            self.btn_dl.configure(state="disabled", text="Scheduled...")
             self.btn_cancel.configure(state="normal")
             self.log(f"[schedule] Download scheduled for {target.strftime('%I:%M %p')}")
             # Build queue preview
@@ -915,12 +915,13 @@ class App:
 
     def _do_start(self, urls, out, fk):
         self._stop.clear()
-        self._paused = False
-        self._done_files = []
+        self._paused   = False
+        self._done_files  = []
         self._spd_history = []
+        self._referers    = getattr(self, "_referers", {})
         self._items = [DL(u,i+1,len(urls)) for i,u in enumerate(urls)]
         self._build_rows(self._items)
-        self.btn_dl.configure(state="disabled", text="?  Download")
+        self.btn_dl.configure(state="disabled", text="Download")
         self.btn_cancel.configure(state="normal")
         self.btn_pause.configure(state="normal")
         self.res_frame.pack_forget()
@@ -941,7 +942,7 @@ class App:
             self.root.after_cancel(self._sched_timer)
             self._sched_timer = None
             self._sched_lbl.configure(text="")
-            self.btn_dl.configure(state="normal", text="?  Download")
+            self.btn_dl.configure(state="normal", text="Download")
             self.log("[schedule] cancelled")
         self.log("[cancel] cancelling...")
 
@@ -1004,8 +1005,8 @@ class App:
         opts = {
             "format":                     chosen,
             "outtmpl": {
-                "default": str(Path(out)/"%(title).100s.%(ext)s"),
-                "chapter": str(Path(out)/"%(title).80s - %(section_title)s.%(ext)s"),
+                "default": str(Path(out)/"%(title).80s.%(ext)s"),
+                "chapter": str(Path(out)/"%(title).60s - %(section_title)s.%(ext)s"),
             },
             "restrictfilenames":          False,
             "windowsfilenames":           False,
@@ -1052,12 +1053,28 @@ class App:
         if is_hls:
             opts["merge_output_format"] = "mp4"
             if self.ff:
-                opts["postprocessors"] = [{"key":"FFmpegVideoConvertor","preferedformat":"mp4"}]
-                opts["postprocessor_args"] = {"ffmpeg": [
-                    "-c:v","libx264","-preset","fast","-crf","18",
-                    "-c:a","aac","-b:a","256k",
-                    "-movflags","+faststart","-pix_fmt","yuv420p"
-                ]}
+                # Re-encode HLS segments to proper H.264+AAC mp4
+                # Compatible with QuickTime, Premiere Pro, VLC, Final Cut
+                opts["postprocessors"] = [
+                    {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+                ]
+                opts["postprocessor_args"] = {
+                    "ffmpeg": [
+                        "-c:v", "libx264",
+                        "-profile:v", "high",
+                        "-level", "4.1",
+                        "-preset", "fast",
+                        "-crf", "16",
+                        "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        "-b:a", "320k",
+                        "-ar", "48000",
+                        "-ac", "2",
+                        "-movflags", "+faststart",
+                        "-map_metadata", "0",
+                        "-vtag", "avc1",
+                    ],
+                }
         if "audio" in f:
             opts["postprocessors"]=[{"key":"FFmpegExtractAudio",
                                      "preferredcodec":f["audio"],"preferredquality":"0"}]
@@ -1167,9 +1184,18 @@ class App:
         if not p.exists(): return
         name = p.stem
         uuid_pat = _re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-", _re.I)
+        import re as _re2
         generic = {"footage","video","clip","download","file","media",
-                   "stream","playlist","index","master","unknown"}
-        if not uuid_pat.match(name) and name.lower() not in generic:
+                   "stream","playlist","index","master","unknown",
+                   "hls","dash","manifest","output","temp","b2483b78","f538fce4"}
+        # Detect random-looking names like "footage-hsi", "clip-3ax2"
+        looks_random = bool(_re2.search(r"-[a-z0-9]{2,6}$", name.lower())) and len(name) < 25
+        is_generic   = (name.lower() in generic or
+                        name.lower().startswith("footage-") or
+                        name.lower().startswith("clip-") or
+                        name.lower().startswith("video-") or
+                        looks_random)
+        if not uuid_pat.match(name) and not is_generic:
             return
         try:
             parsed   = _up.urlparse(url)
@@ -1231,7 +1257,7 @@ class App:
         self._mq.put(("spd",0))
         done = sum(1 for it in self._items if it.status=="done")
         err  = sum(1 for it in self._items if it.status=="error")
-        msg  = f"Done: {done} downloaded"
+        msg  = f"Done: {done} file(s) downloaded"
         if err:    msg+=f"  |  {err} error"
         if self._paused: msg+="  |  paused"
         self._mq.put(("status",msg))
@@ -1259,7 +1285,7 @@ class App:
         self.log_txt.configure(state="normal")
         self.log_txt.delete("1.0","end")
         self.log_txt.configure(state="disabled")
-        self.log("[info] Ready for next download.")
+        self.log("[ready] Paste URL and press Download")
 
     def _notify(self, title, body):
         try:
