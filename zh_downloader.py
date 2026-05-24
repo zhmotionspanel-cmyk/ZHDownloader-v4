@@ -780,14 +780,14 @@ class App:
         self.log(f"[bridge] {url[:80]}")
 
         if self._is_running():
-            # Running — append to queue
+            # Running - append to queue
             cur = self.url_box.get("1.0","end").strip()
             if url not in cur:
                 self.url_box.delete("1.0","end")
                 self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
                 self.log("[bridge] Added to queue")
         else:
-            # Not running — replace URL box and start immediately
+            # Not running - replace URL box and start immediately
             self.url_box.delete("1.0","end")
             self.url_box.insert("1.0", url)
             self.root.update_idletasks()  # Force UI refresh before start
