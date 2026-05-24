@@ -771,17 +771,29 @@ class App:
 
     def _recv_ext(self, payload):
         url, referer = payload if isinstance(payload, tuple) else (payload, "")
+        if not hasattr(self, "_referers"): self._referers = {}
+        if referer: self._referers[url] = referer
+
+        # If download is running, just add to queue (append to URL box)
+        if self._is_running():
+            cur = self.url_box.get("1.0","end").strip()
+            if url not in cur:
+                self.url_box.delete("1.0","end")
+                self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
+                self.log(f"[bridge] queued: {url[:80]}")
+            else:
+                self.log(f"[bridge] already queued: {url[:60]}")
+            return
+
+        # Not running — add and start
         cur = self.url_box.get("1.0","end").strip()
         if url not in cur:
             self.url_box.delete("1.0","end")
             self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
-        # Store referer for this URL
-        if not hasattr(self, "_referers"): self._referers = {}
-        if referer: self._referers[url] = referer
         try: self.root.deiconify(); self.root.lift(); self.root.focus_force(); self.root.bell()
         except: pass
         self.log(f"[bridge] {url[:80]}")
-        if not self._is_running(): self._start()
+        self._start()
 
     # -- resume -------------------------------------------------------------
     def _check_resume(self):
@@ -936,7 +948,19 @@ class App:
     # -- ydl opts -----------------------------------------------------------
     def _ydl_opts(self, out, fk, item, url=""):
         f = FMTS[fk]
-        chosen = f.get("fb",f["fmt"]) if not self.ff and "fb" in f else f["fmt"]
+        # HLS/stream URLs: use simple format (codec filters break HLS)
+        is_hls = bool(url and (
+            ".m3u8" in url.lower() or "hls" in url.lower() or
+            "artlist.io" in url.lower() or "artgrid.io/content" in url.lower() or
+            "akamaized.net" in url.lower() or "cloudfront.net" in url.lower() or
+            "cms-public" in url.lower()
+        ))
+        if is_hls:
+            chosen = "best/bestvideo+bestaudio/bestaudio"
+        elif not self.ff and "fb" in f:
+            chosen = f.get("fb", f["fmt"])
+        else:
+            chosen = f["fmt"]
 
         def hook(d):
             if self._stop.is_set():
@@ -968,7 +992,7 @@ class App:
 
         opts = {
             "format":                     chosen,
-            "outtmpl":                    str(Path(out)/"%(title)s [%(id)s].%(ext)s"),
+            "outtmpl":                    str(Path(out)/"%(title).80s.%(ext)s"),
             "noplaylist":                 not self.pl_var.get(),
             "writesubtitles":             self.sub_var.get(),
             "writeautomaticsub":          self.sub_var.get(),
@@ -1003,7 +1027,8 @@ class App:
         if self.ff: opts["ffmpeg_location"]=self.ff
         ck = self.ck_var.get()
         if ck and ck!="none": opts["cookiesfrombrowser"]=(ck,)
-        if "merge" in f: opts["merge_output_format"]=f["merge"]
+        if "merge" in f and not is_hls: opts["merge_output_format"]=f["merge"]
+        if is_hls: opts["merge_output_format"]="mp4"
         if "audio" in f:
             opts["postprocessors"]=[{"key":"FFmpegExtractAudio",
                                      "preferredcodec":f["audio"],"preferredquality":"0"}]
