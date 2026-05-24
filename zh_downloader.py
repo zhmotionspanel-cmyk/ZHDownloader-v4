@@ -404,7 +404,7 @@ class App:
         tk.Label(tx, text=f"v{APP_VER}  -  {APP_AUTHOR}  -  Universal Download Manager",
                  bg="#2a0e00", fg="#9a5020", font=("Helvetica",9)).pack(anchor="w")
         # bridge dot
-        self._dot = tk.Label(hi, text="? Bridge", bg="#2a0e00", fg="#7a4a2a", font=("Helvetica",9))
+        self._dot = tk.Label(hi, text="Bridge", bg="#2a0e00", fg="#7a4a2a", font=("Helvetica",9))
         self._dot.pack(side="right")
 
         # Body scroll
@@ -513,7 +513,7 @@ class App:
                                   font=("Helvetica",11,"bold"), padx=14, pady=8)
         self.res_lbl.pack(side="left")
         rb = tk.Frame(self.res_frame, bg="#152a15"); rb.pack(side="right", padx=8)
-        ttk.Button(rb, text="? Resume", style="Main.TButton", command=self._do_resume).pack(side="left", padx=(0,6))
+        ttk.Button(rb, text="Resume", style="Main.TButton", command=self._do_resume).pack(side="left", padx=(0,6))
         ttk.Button(rb, text="Discard",  style="Ghost.TButton", command=self._discard).pack(side="left")
 
         # Speed + progress
@@ -633,7 +633,7 @@ class App:
             item.row = row
             fg,bg2 = BADGE_COLORS.get(item.badge,(MUTED,SURF2))
             # status icon
-            item._lbl_icon = tk.Label(row, text="?", bg="#1e0d02", fg=MUTED,
+            item._lbl_icon = tk.Label(row, text="x", bg="#1e0d02", fg=MUTED,
                                       font=("Helvetica",14,"bold"), width=2)
             item._lbl_icon.grid(row=0,column=0,rowspan=2,padx=(4,8))
             # badge
@@ -763,7 +763,7 @@ class App:
                 elif kind=="done":
                     self._on_done()
                 elif kind=="bridge_ok":
-                    self._dot.configure(fg=GREEN, text="? Bridge")
+                    self._dot.configure(fg=GREEN, text="Bridge")
                 elif kind=="ext_url":
                     self._recv_ext(payload)
         except Q.Empty: pass
@@ -774,26 +774,24 @@ class App:
         if not hasattr(self, "_referers"): self._referers = {}
         if referer: self._referers[url] = referer
 
-        # If download is running, just add to queue (append to URL box)
-        if self._is_running():
-            cur = self.url_box.get("1.0","end").strip()
-            if url not in cur:
-                self.url_box.delete("1.0","end")
-                self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
-                self.log(f"[bridge] queued: {url[:80]}")
-            else:
-                self.log(f"[bridge] already queued: {url[:60]}")
-            return
-
-        # Not running - add and start
+        # Always add URL to box
         cur = self.url_box.get("1.0","end").strip()
         if url not in cur:
             self.url_box.delete("1.0","end")
             self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
-        try: self.root.deiconify(); self.root.lift(); self.root.focus_force(); self.root.bell()
+
+        try: self.root.deiconify(); self.root.lift()
         except: pass
+
         self.log(f"[bridge] {url[:80]}")
-        self._start()
+
+        # Start immediately if not already running
+        if not self._is_running():
+            try: self.root.bell()
+            except: pass
+            self._start()
+        else:
+            self.log("[bridge] Added to queue - will start after current download")
 
     # -- resume -------------------------------------------------------------
     def _check_resume(self):
@@ -872,7 +870,7 @@ class App:
             self._sched_lbl.configure(text="Starting now...")
             self._sched_timer = None
             self._sched_time  = None
-            self.btn_dl.configure(state="disabled", text="Download")
+            self.btn_dl.configure(state="disabled", text="Scheduled...")
             self._do_start(urls, out, fk)
         else:
             self._sched_lbl.configure(text=f"? Starting in {self._fmt_countdown(remaining)}")
@@ -921,7 +919,7 @@ class App:
         self._referers    = getattr(self, "_referers", {})
         self._items = [DL(u,i+1,len(urls)) for i,u in enumerate(urls)]
         self._build_rows(self._items)
-        self.btn_dl.configure(state="disabled", text="Download")
+        self.btn_dl.configure(state="disabled", text="Scheduled...")
         self.btn_cancel.configure(state="normal")
         self.btn_pause.configure(state="normal")
         self.res_frame.pack_forget()
