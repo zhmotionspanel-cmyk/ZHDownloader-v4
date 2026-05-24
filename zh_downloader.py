@@ -992,7 +992,9 @@ class App:
 
         opts = {
             "format":                     chosen,
-            "outtmpl":                    str(Path(out)/"%(title).80s.%(ext)s"),
+            "outtmpl":                    str(Path(out)/"%(title).60s.%(ext)s"),
+            "restrictfilenames":          False,
+            "windowsfilenames":           False,
             "noplaylist":                 not self.pl_var.get(),
             "writesubtitles":             self.sub_var.get(),
             "writeautomaticsub":          self.sub_var.get(),
@@ -1110,7 +1112,9 @@ class App:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
-            # -- after download, clear _stop so next item starts --
+            # Rename UUID-based filenames to something readable
+            if item.done_f:
+                self._rename_if_uuid(item, url)
             if not self._stop.is_set():
                 item.status="done"; item.pct=100
                 self._mq.put(("item_up",item))
@@ -1126,6 +1130,38 @@ class App:
             self.log(f"[error] unexpected: {e}")
             item.status="error"
             self._mq.put(("item_up",item))
+
+    def _rename_if_uuid(self, item, url):
+        """Rename UUID-based filenames to readable names."""
+        import re, urllib.parse
+        if not item.done_f: return
+        p = Path(item.done_f)
+        if not p.exists(): return
+        # Check if name looks like UUID
+        name = p.stem
+        uuid_pat = re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-", re.I)
+        if not uuid_pat.match(name): return
+        # Get readable name from URL
+        try:
+            path_parts = urllib.parse.unquote(urllib.parse.urlparse(url).path)
+            slug = [x for x in path_parts.split("/") if x and not uuid_pat.match(x)]
+            new_name = slug[-1] if slug else "download"
+        except:
+            new_name = "download"
+        # Clean name
+        new_name = re.sub(r"[^a-zA-Z0-9_ -]", "", new_name).strip()[:60] or "download"
+        new_path = p.parent / f"{new_name}{p.suffix}"
+        # Avoid overwrite
+        counter = 1
+        while new_path.exists() and new_path != p:
+            new_path = p.parent / f"{new_name}_{counter}{p.suffix}"
+            counter += 1
+        try:
+            p.rename(new_path)
+            item.done_f = str(new_path)
+            self.log(f"[rename] {p.name} -> {new_path.name}")
+        except Exception as e:
+            self.log(f"[warn] rename failed: {e}")
 
     def _run_file(self, url, out, item):
         def prog(p,s,r):
