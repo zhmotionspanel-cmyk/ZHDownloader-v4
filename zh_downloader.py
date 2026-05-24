@@ -24,20 +24,21 @@ APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
 
-# Colors
-BG      = "#111111"
-SURF    = "#1a1a1a"
-SURF2   = "#222222"
-BORDER  = "#2e2e2e"
-GOLD    = "#d4a13a"
-MAROON  = "#5b1a1f"
-TEXT    = "#e0e0e0"
-MUTED   = "#555555"
+# Colors — Sunset theme
+BG      = "#160800"
+SURF    = "#1e0d02"
+SURF2   = "#271205"
+BORDER  = "#3d1e08"
+GOLD    = "#ff8c42"
+MAROON  = "#8b2500"
+TEXT    = "#ffddc0"
+MUTED   = "#7a4a2a"
 GREEN   = "#6fcf97"
 YELLOW  = "#f2c94c"
 RED     = "#eb5757"
 BLUE    = "#56ccf2"
 PURPLE  = "#bb86fc"
+ACCENT  = "#ff6b35"
 
 DEFAULT_DIR = str(Path.home() / "Downloads" / "ZHDownloader")
 CFG_PATH    = Path.home() / ".zhdownloader.json"
@@ -330,13 +331,19 @@ class App:
         self._done_files = []
         self._clip_last  = ""
         self._clip_on    = tk.BooleanVar(value=self.cfg.get("clip",True))
-        self._spd_history = []   # [(time, bytes)] for speed graph
+        self._spd_history = []
+        self._sched_time  = None
+        self._sched_timer = None   # [(time, bytes)] for speed graph
         self.ff        = find_ff()
 
         root.title(f"{APP_NAME} v{APP_VER}")
         root.geometry("920x800")
         root.minsize(780,640)
         root.configure(bg=BG)
+        # Sunset window title bar tint (macOS)
+        try:
+            root.tk.call("wm", "attributes", root, "-transparentcolor", "")
+        except: pass
 
         self._ui()
         self._poll()
@@ -363,33 +370,40 @@ class App:
         s.configure("TLabel",      background=BG, foreground=TEXT, font=("Helvetica",10))
         s.configure("TCheckbutton",background=BG, foreground=MUTED, font=("Helvetica",10))
         s.map("TCheckbutton", background=[("active",BG)])
-        s.configure("Main.TButton", background=GOLD, foreground=BG,
-                    font=("Helvetica",11,"bold"), padding=(18,9), borderwidth=0)
-        s.map("Main.TButton", background=[("active","#e8b84a"),("disabled","#3a3a2a")],
-              foreground=[("disabled",MUTED)])
-        s.configure("Ghost.TButton", background=SURF2, foreground=MUTED,
-                    font=("Helvetica",10), padding=(10,7), borderwidth=0, relief="flat")
-        s.map("Ghost.TButton", background=[("active",SURF)], foreground=[("active",TEXT)])
+        s.configure("Main.TButton", background=GOLD, foreground="#000000",
+                    font=("Helvetica",11,"bold"), padding=(18,9), borderwidth=0,
+                    relief="flat", anchor="center")
+        s.map("Main.TButton",
+              background=[("active","#e8b84a"),("pressed","#c8911a"),("disabled","#3a3a2a")],
+              foreground=[("active","#000000"),("pressed","#000000"),("disabled",MUTED)],
+              relief=[("pressed","flat")])
+        s.configure("Ghost.TButton", background=SURF2, foreground=TEXT,
+                    font=("Helvetica",10), padding=(10,7), borderwidth=1,
+                    relief="flat", anchor="center")
+        s.map("Ghost.TButton",
+              background=[("active",SURF),("disabled",BG)],
+              foreground=[("active",TEXT),("disabled",MUTED)],
+              relief=[("pressed","flat")])
         s.configure("TProgressbar", troughcolor=SURF2, background=GOLD,
                     borderwidth=0, thickness=4)
 
         # Header
-        hdr = tk.Frame(self.root, bg=MAROON, height=68)
+        hdr = tk.Frame(self.root, bg="#2a0e00", height=68)
         hdr.pack(fill="x"); hdr.pack_propagate(False)
-        hi = tk.Frame(hdr, bg=MAROON); hi.pack(fill="both", expand=True, padx=20, pady=12)
+        hi = tk.Frame(hdr, bg="#2a0e00"); hi.pack(fill="both", expand=True, padx=20, pady=12)
         lp = self._r("header-logo.png")
         if lp:
             try:
                 self._logo = tk.PhotoImage(file=lp)
-                tk.Label(hi, image=self._logo, bg=MAROON, bd=0).pack(side="left", padx=(0,12))
+                tk.Label(hi, image=self._logo, bg="#2a0e00", bd=0).pack(side="left", padx=(0,12))
             except: pass
-        tx = tk.Frame(hi, bg=MAROON); tx.pack(side="left")
-        tk.Label(tx, text=APP_NAME, bg=MAROON, fg=GOLD,
+        tx = tk.Frame(hi, bg="#2a0e00"); tx.pack(side="left")
+        tk.Label(tx, text=APP_NAME, bg="#2a0e00", fg="#ff8c42",
                  font=("Helvetica",16,"bold")).pack(anchor="w")
         tk.Label(tx, text=f"v{APP_VER}  ·  {APP_AUTHOR}  ·  Universal Download Manager",
-                 bg=MAROON, fg="#c8a080", font=("Helvetica",9)).pack(anchor="w")
+                 bg="#2a0e00", fg="#9a5020", font=("Helvetica",9)).pack(anchor="w")
         # bridge dot
-        self._dot = tk.Label(hi, text="● Bridge", bg=MAROON, fg=MUTED, font=("Helvetica",9))
+        self._dot = tk.Label(hi, text="● Bridge", bg="#2a0e00", fg="#7a4a2a", font=("Helvetica",9))
         self._dot.pack(side="right")
 
         # Body scroll
@@ -415,10 +429,10 @@ class App:
         # URL box
         self._section(pad, "URL  —  one or more links, one per line")
         self.url_box = tk.Text(pad, height=3, font=("Menlo",11),
-                               bg=SURF, fg=TEXT, insertbackground=GOLD,
+                               bg="#1e0d02", fg="#ffd0a0", insertbackground="#ff8c42",
                                relief="flat", highlightthickness=1,
-                               highlightbackground=BORDER, highlightcolor=GOLD,
-                               padx=10, pady=8, selectbackground=MAROON)
+                               highlightbackground="#3d1e08", highlightcolor="#ff8c42",
+                               padx=10, pady=8, selectbackground="#8b2500")
         self.url_box.pack(fill="x", padx=20, pady=(4,10))
         # paste shortcut
         self.url_box.bind("<Command-v>", lambda e: self.root.after(100, self._on_paste))
@@ -476,6 +490,22 @@ class App:
         self._ghost_btn(btns, "Clear Log",   self._clear_log).pack(side="right")
         self._ghost_btn(btns, "Clear Queue", self._clear_queue).pack(side="right", padx=(0,6))
 
+        # Scheduler row
+        sched_row = tk.Frame(pad, bg=BG); sched_row.pack(fill="x", padx=20, pady=(0,8))
+        self._lbl(sched_row, "Schedule:").pack(side="left", padx=(0,8))
+        self._sched_var = tk.StringVar(value="Now")
+        sched_menu = tk.OptionMenu(sched_row, self._sched_var,
+                                   "Now","In 30 minutes","In 1 hour","In 2 hours",
+                                   "In 6 hours","In 12 hours","Tonight 11 PM",
+                                   "Tomorrow 6 AM","Tomorrow 9 AM")
+        self._style_menu(sched_menu); sched_menu.configure(width=16)
+        sched_menu.pack(side="left")
+        self._sched_lbl = tk.Label(sched_row, text="", bg=BG, fg="#ff8c42",
+                                   font=("Helvetica",10,"bold"))
+        self._sched_lbl.pack(side="left", padx=(12,0))
+        ttk.Button(sched_row, text="✕ Clear schedule", style="Ghost.TButton",
+                   command=self._clear_sched).pack(side="right")
+
         # Resume banner
         self.res_frame = tk.Frame(pad, bg="#152a15")
         self.res_lbl   = tk.Label(self.res_frame, text="", bg="#152a15", fg=GREEN,
@@ -498,8 +528,8 @@ class App:
                  font=("Helvetica",9,"bold")).pack(side="right")
 
         # Speed graph (mini canvas)
-        self.graph = tk.Canvas(pad, bg=SURF, height=40, highlightthickness=1,
-                               highlightbackground=BORDER)
+        self.graph = tk.Canvas(pad, bg="#1e0d02", height=40, highlightthickness=1,
+                               highlightbackground="#3d1e08")
         self.graph.pack(fill="x", padx=20, pady=(0,8))
         self.graph.create_text(6, 20, text="Speed graph", fill=MUTED,
                                font=("Helvetica",8), anchor="w", tags="placeholder")
@@ -516,11 +546,12 @@ class App:
         self._section(pad, "LOG")
         lf = tk.Frame(pad, bg=BG); lf.pack(fill="x", padx=20, pady=(4,20))
         self.log_txt = tk.Text(lf, height=7, font=("Menlo",10),
-                               bg="#0a0a0a", fg="#444444", relief="flat",
+                               bg="#0d0500", fg="#5a3010", relief="flat",
                                padx=10, pady=8, wrap="word", state="disabled")
         self.log_txt.pack(side="left", fill="both", expand=True)
         ttk.Scrollbar(lf, command=self.log_txt.yview).pack(side="right", fill="y")
-        for tag,col in [("ok",GREEN),("warn",YELLOW),("err",RED),("info",BLUE),("dim","#444444")]:
+        for tag,col in [("ok","#6fcf97"),("warn","#f2c94c"),("err","#eb5757"),
+                           ("info","#ffaa70"),("dim","#5a3010")]:
             self.log_txt.tag_configure(tag, foreground=col)
 
     # ── UI helpers ─────────────────────────────────────────────────────────
@@ -595,13 +626,13 @@ class App:
                 text="No downloads yet.", bg=BG, fg=MUTED, font=("Helvetica",10))
             self._empty_lbl.pack(pady=16); return
         for item in items:
-            row = tk.Frame(self.q_frame, bg=SURF, highlightthickness=1,
-                           highlightbackground=BORDER)
+            row = tk.Frame(self.q_frame, bg="#1e0d02", highlightthickness=1,
+                           highlightbackground="#3d1e08")
             row.pack(fill="x", pady=2, ipady=6, ipadx=8)
             item.row = row
             fg,bg2 = BADGE_COLORS.get(item.badge,(MUTED,SURF2))
             # status icon
-            item._lbl_icon = tk.Label(row, text="○", bg=SURF, fg=MUTED,
+            item._lbl_icon = tk.Label(row, text="○", bg="#1e0d02", fg=MUTED,
                                       font=("Helvetica",14,"bold"), width=2)
             item._lbl_icon.grid(row=0,column=0,rowspan=2,padx=(4,8))
             # badge
@@ -611,11 +642,11 @@ class App:
             # name
             short = item.name if len(item.name)<=60 else item.name[:57]+"…"
             item._lbl_name = tk.Label(row, text=f"[{item.idx}/{item.total}] {short}",
-                                      bg=SURF, fg=TEXT, font=("Helvetica",10),
+                                      bg="#1e0d02", fg="#ffd0a0", font=("Helvetica",10),
                                       anchor="w", justify="left")
             item._lbl_name.grid(row=0,column=2,sticky="ew",padx=(0,8))
             # meta
-            item._lbl_meta = tk.Label(row, text="Waiting…", bg=SURF, fg=MUTED,
+            item._lbl_meta = tk.Label(row, text="Waiting…", bg="#1e0d02", fg=MUTED,
                                       font=("Helvetica",9))
             item._lbl_meta.grid(row=1,column=1,columnspan=2,sticky="w")
             # progress bar
@@ -658,7 +689,7 @@ class App:
             y = int(h - (v/mx)*(h-4) - 2)
             pts.extend([x,y])
         if len(pts)>=4:
-            g.create_line(pts, fill=GOLD, width=1.5, smooth=True, tags="graph")
+            g.create_line(pts, fill="#ff8c42", width=1.5, smooth=True, tags="graph")
         g.create_text(6,6, text=f"Peak: {spd(mx)}", fill=MUTED,
                       font=("Helvetica",8), anchor="nw", tags="graph")
 
@@ -777,9 +808,63 @@ class App:
     def _is_running(self):
         return self._thread and self._thread.is_alive()
 
+    # ── Scheduler ──────────────────────────────────────────────────────────
+    def _clear_sched(self):
+        if self._sched_timer:
+            self.root.after_cancel(self._sched_timer)
+            self._sched_timer = None
+        self._sched_time = None
+        self._sched_var.set("Now")
+        self._sched_lbl.configure(text="")
+        self.btn_dl.configure(state="normal", text="⬇  Download")
+        self.log("[schedule] cleared")
+
+    def _get_sched_delay(self):
+        """Return delay in seconds based on selected option. None = now."""
+        import datetime
+        v = self._sched_var.get()
+        now = datetime.datetime.now()
+        if v == "Now": return None
+        elif v == "In 30 minutes": return 30*60
+        elif v == "In 1 hour":    return 60*60
+        elif v == "In 2 hours":   return 2*60*60
+        elif v == "In 6 hours":   return 6*60*60
+        elif v == "In 12 hours":  return 12*60*60
+        elif v == "Tonight 11 PM":
+            t = now.replace(hour=23, minute=0, second=0, microsecond=0)
+            if t <= now: t += datetime.timedelta(days=1)
+            return (t - now).total_seconds()
+        elif v == "Tomorrow 6 AM":
+            t = (now + datetime.timedelta(days=1)).replace(hour=6, minute=0, second=0, microsecond=0)
+            return (t - now).total_seconds()
+        elif v == "Tomorrow 9 AM":
+            t = (now + datetime.timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            return (t - now).total_seconds()
+        return None
+
+    def _fmt_countdown(self, secs):
+        h,r = divmod(int(secs),3600); m,s = divmod(r,60)
+        if h: return f"{h}h {m}m {s}s"
+        if m: return f"{m}m {s}s"
+        return f"{s}s"
+
+    def _countdown_tick(self, target_time, urls, out, fk):
+        import datetime
+        remaining = (target_time - datetime.datetime.now()).total_seconds()
+        if remaining <= 0:
+            self._sched_lbl.configure(text="Starting now…")
+            self._sched_timer = None
+            self._sched_time  = None
+            self.btn_dl.configure(state="disabled", text="⬇  Download")
+            self._do_start(urls, out, fk)
+        else:
+            self._sched_lbl.configure(text=f"⏰ Starting in {self._fmt_countdown(remaining)}")
+            self._sched_timer = self.root.after(1000,
+                lambda: self._countdown_tick(target_time, urls, out, fk))
+
     def _start(self):
-        # BUG FIX: parse URLs properly, strip blanks
-        raw = self.url_box.get("1.0","end")
+        import datetime
+        raw  = self.url_box.get("1.0","end")
         urls = [u.strip() for u in raw.splitlines() if u.strip() and URL_RE.match(u.strip())]
         if not urls:
             messagebox.showwarning(APP_NAME,"Paste at least one valid URL."); return
@@ -793,22 +878,36 @@ class App:
                          "clip":self._clip_on.get()})
         jsave(CFG_PATH,self.cfg)
 
-        # BUG FIX: always reset stop event fully before new batch
+        delay = self._get_sched_delay()
+        if delay and delay > 0:
+            # Cancel any existing schedule
+            if self._sched_timer:
+                self.root.after_cancel(self._sched_timer)
+            target = datetime.datetime.now() + datetime.timedelta(seconds=delay)
+            self.btn_dl.configure(state="disabled", text="⏰ Scheduled")
+            self.btn_cancel.configure(state="normal")
+            self.log(f"[schedule] Download scheduled for {target.strftime('%I:%M %p')}")
+            # Build queue preview
+            self._items = [DL(u,i+1,len(urls)) for i,u in enumerate(urls)]
+            self._build_rows(self._items)
+            self._sched_timer = self.root.after(1000,
+                lambda: self._countdown_tick(target, urls, out, fk))
+            return
+
+        self._do_start(urls, out, fk)
+
+    def _do_start(self, urls, out, fk):
         self._stop.clear()
         self._paused = False
         self._done_files = []
         self._spd_history = []
-
-        # Build items
         self._items = [DL(u,i+1,len(urls)) for i,u in enumerate(urls)]
         self._build_rows(self._items)
-
-        self.btn_dl.configure(state="disabled")
+        self.btn_dl.configure(state="disabled", text="⬇  Download")
         self.btn_cancel.configure(state="normal")
         self.btn_pause.configure(state="normal")
         self.res_frame.pack_forget()
         self.prog_bar["value"]=0
-
         self._thread = threading.Thread(
             target=self._run, args=(urls,out,fk), daemon=True)
         self._thread.start()
@@ -820,6 +919,13 @@ class App:
 
     def _do_cancel(self):
         self._paused=False; self._stop.set()
+        # Also cancel scheduled download
+        if self._sched_timer:
+            self.root.after_cancel(self._sched_timer)
+            self._sched_timer = None
+            self._sched_lbl.configure(text="")
+            self.btn_dl.configure(state="normal", text="⬇  Download")
+            self.log("[schedule] cancelled")
         self.log("[cancel] cancelling…")
 
     # ── ydl opts ───────────────────────────────────────────────────────────
@@ -867,7 +973,19 @@ class App:
             "progress_hooks":             [hook],
             "logger":                     _Log(self),
             "no_warnings":                False,
-            "extractor_args":             {"youtube": {"player_client": ["web", "android"]}},
+            "extractor_args":             {
+                "youtube": {
+                    "player_client": ["web", "android", "ios"],
+                    "skip": ["webpage"],
+                },
+                "generic": {"impersonate": True},
+            },
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            "geo_bypass":                 True,
+            "age_limit":                  99,
             "retries":                    15,
             "fragment_retries":           15,
             "concurrent_fragment_downloads": 4,
@@ -924,17 +1042,24 @@ class App:
                 item.status="error"
                 self._mq.put(("item_up",item))
 
-            # BUG FIX: mark done if not stopped
+            # Mark done if not explicitly stopped
             if not self._stop.is_set() and item.status not in ("error","paused","cancelled"):
                 item.status="done"; item.pct=100
                 self._mq.put(("item_up",item))
+
+            # ── KEY FIX: if item errored but user did NOT cancel/pause,
+            #    clear _stop so next URL starts fresh ──────────────────────
+            if item.status == "error" and not self._paused:
+                self._stop.clear()
 
             # Remove from resume queue
             self.state["queue"]=[q for q in self.state["queue"] if q.get("url")!=url]
             jsave(STATE_PATH,self.state)
 
-            # BUG FIX: speed graph reset between items
+            # Speed graph reset between items
             self._mq.put(("spd",0))
+            # Small pause between items so UI updates
+            import time; time.sleep(0.3)
 
         # Save paused queue
         if self._paused:
@@ -952,6 +1077,7 @@ class App:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
+            # ── after download, clear _stop so next item starts ──
             if not self._stop.is_set():
                 item.status="done"; item.pct=100
                 self._mq.put(("item_up",item))
@@ -959,7 +1085,13 @@ class App:
             if "user_stop" in str(e):
                 item.status="paused" if self._paused else "cancelled"
             else:
-                self.log(f"[error] {e}"); item.status="error"
+                self.log(f"[error] {e}")
+                item.status="error"
+                # Don't propagate — let loop continue to next URL
+            self._mq.put(("item_up",item))
+        except Exception as e:
+            self.log(f"[error] unexpected: {e}")
+            item.status="error"
             self._mq.put(("item_up",item))
 
     def _run_file(self, url, out, item):
