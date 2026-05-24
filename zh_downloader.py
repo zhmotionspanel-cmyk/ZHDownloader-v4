@@ -934,7 +934,7 @@ class App:
         self.log("[cancel] cancelling...")
 
     # -- ydl opts -----------------------------------------------------------
-    def _ydl_opts(self, out, fk, item):
+    def _ydl_opts(self, out, fk, item, url=""):
         f = FMTS[fk]
         chosen = f.get("fb",f["fmt"]) if not self.ff and "fb" in f else f["fmt"]
 
@@ -987,8 +987,8 @@ class App:
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept": "*/*",
-                "Referer": getattr(self,"_referers",{}).get(url, url),
-                "Origin":  "/".join(url.split("/")[:3]) if url.startswith("http") else url,
+                "Referer": getattr(self,"_referers",{}).get(url, url) or url,
+                "Origin":  "/".join(url.split("/")[:3]) if url and url.startswith("http") else "",
             },
             "geo_bypass":                 True,
             "age_limit":                  99,
@@ -1081,7 +1081,7 @@ class App:
         self._mq.put(("done",None))
 
     def _run_video(self, url, out, fk, item):
-        opts = self._ydl_opts(out,fk,item)
+        opts = self._ydl_opts(out,fk,item,url)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
