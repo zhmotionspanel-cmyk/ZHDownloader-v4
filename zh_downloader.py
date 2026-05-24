@@ -308,11 +308,12 @@ class Bridge(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length","0"))
             d = json.loads(self.rfile.read(n) or b"{}")
         except: d={}
-        url = (d.get("url") or "").strip()
+        url     = (d.get("url")     or "").strip()
+        referer = (d.get("referer") or "").strip()
         if not url:
             self.send_response(400); self._c(); self.end_headers()
             self.wfile.write(b'{"ok":false}'); return
-        self.app._mq.put(("ext_url", url))
+        self.app._mq.put(("ext_url", (url, referer)))
         self.send_response(200); self._c()
         self.send_header("Content-Type","application/json"); self.end_headers()
         self.wfile.write(b'{"ok":true}')
@@ -768,11 +769,15 @@ class App:
         except Q.Empty: pass
         self.root.after(80, self._poll)
 
-    def _recv_ext(self, url):
+    def _recv_ext(self, payload):
+        url, referer = payload if isinstance(payload, tuple) else (payload, "")
         cur = self.url_box.get("1.0","end").strip()
         if url not in cur:
             self.url_box.delete("1.0","end")
             self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
+        # Store referer for this URL
+        if not hasattr(self, "_referers"): self._referers = {}
+        if referer: self._referers[url] = referer
         try: self.root.deiconify(); self.root.lift(); self.root.focus_force(); self.root.bell()
         except: pass
         self.log(f"[bridge] {url[:80]}")
@@ -976,16 +981,19 @@ class App:
             "extractor_args":             {
                 "youtube": {
                     "player_client": ["web", "android", "ios"],
-                    "skip": ["webpage"],
                 },
-                "generic": {"impersonate": True},
             },
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "*/*",
+                "Referer": getattr(self,"_referers",{}).get(url, url),
+                "Origin":  "/".join(url.split("/")[:3]) if url.startswith("http") else url,
             },
             "geo_bypass":                 True,
             "age_limit":                  99,
+            "hls_prefer_native":          False,
+            "hls_use_mpegts":             True,
             "retries":                    15,
             "fragment_retries":           15,
             "concurrent_fragment_downloads": 4,
