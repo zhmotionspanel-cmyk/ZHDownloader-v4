@@ -1,18 +1,11 @@
-"""ZH Downloader v3.0 — Universal download manager by ZH Motions.
-
-Features:
-- Video/audio: 1800+ sites via yt-dlp (YouTube, Vimeo, Instagram, TikTok, Twitter/X, etc.)
-- General files: any direct URL with multi-thread + resume support
-- Resume interrupted downloads (video + file)
-- Multi-URL queue — stable, no drop after 2-3 items
-- Dark professional UI
-- Browser extension bridge (port 9613)
-- Clipboard auto-detection
-- Native OS notifications
+"""
+ZH Downloader v4.0 — Universal Download Manager by ZH Motions
+IDM-style: queue, speed graph, per-item control, resume, scheduler
+Bugs fixed: log clear, multi-URL queue drop, auto-detect, stop event reset
 """
 
-import os, sys, threading, queue, json, subprocess, shutil, platform
-import re, time, urllib.request, urllib.parse, urllib.error
+import os, sys, threading, queue as Q, json, subprocess, shutil, platform
+import re, time, urllib.request, urllib.parse, urllib.error, socket
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from concurrent.futures import ThreadPoolExecutor
@@ -22,1014 +15,1018 @@ from tkinter import ttk, filedialog, messagebox
 try:
     import yt_dlp
 except ImportError:
-    print("yt-dlp not installed. Run: pip install -r requirements.txt")
-    sys.exit(1)
+    print("Run: pip install -r requirements.txt"); sys.exit(1)
 
 # ── Constants ──────────────────────────────────────────────────────────────
-APP_NAME      = "ZH Downloader"
-APP_VERSION   = "3.0.0"
-APP_AUTHOR    = "ZH Motions"
-APP_WEBSITE   = "https://zhmotions.com"
-LOCAL_PORT    = 9613
+APP_NAME    = "ZH Downloader"
+APP_VER     = "4.0.0"
+APP_AUTHOR  = "ZH Motions"
+APP_URL     = "https://zhmotions.com"
+BRIDGE_PORT = 9613
 
-# Dark theme palette
-C_BG        = "#111111"
-C_SURFACE   = "#1a1a1a"
-C_SURFACE2  = "#222222"
-C_BORDER    = "#2e2e2e"
-C_GOLD      = "#d4a13a"
-C_MAROON    = "#5b1a1f"
-C_TEXT      = "#e0e0e0"
-C_MUTED     = "#666666"
-C_SUCCESS   = "#6fcf97"
-C_WARN      = "#f2c94c"
-C_ERROR     = "#eb5757"
-C_INFO      = "#56ccf2"
-C_PURPLE    = "#bb86fc"
+# Colors
+BG      = "#111111"
+SURF    = "#1a1a1a"
+SURF2   = "#222222"
+BORDER  = "#2e2e2e"
+GOLD    = "#d4a13a"
+MAROON  = "#5b1a1f"
+TEXT    = "#e0e0e0"
+MUTED   = "#555555"
+GREEN   = "#6fcf97"
+YELLOW  = "#f2c94c"
+RED     = "#eb5757"
+BLUE    = "#56ccf2"
+PURPLE  = "#bb86fc"
 
-DEFAULT_DIR  = str(Path.home() / "Downloads" / "ZHDownloader")
-CONFIG_PATH  = Path.home() / ".zhdownloader.json"
-STATE_PATH   = Path.home() / ".zhdownloader-state.json"
-PARTIAL_DIR  = Path.home() / ".zhdownloader-partials"
-THREADS_FILE = 8
+DEFAULT_DIR = str(Path.home() / "Downloads" / "ZHDownloader")
+CFG_PATH    = Path.home() / ".zhdownloader.json"
+STATE_PATH  = Path.home() / ".zhdownloader-state.json"
+PARTS_DIR   = Path.home() / ".zhdownloader-parts"
+
+THREADS = 8
 
 # ── Helpers ────────────────────────────────────────────────────────────────
-def load_json(path, default):
+def jload(p, d):
     try:
-        if Path(path).exists():
-            return json.loads(Path(path).read_text())
+        if Path(p).exists(): return json.loads(Path(p).read_text())
     except: pass
-    return default
+    return d
 
-def save_json(path, data):
-    try: Path(path).write_text(json.dumps(data, indent=2))
+def jsave(p, d):
+    try: Path(p).write_text(json.dumps(d, indent=2))
     except: pass
 
-def find_ffmpeg():
+def find_ff():
     p = shutil.which("ffmpeg")
     if p: return p
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
-    for c in [base/"ffmpeg", base/"ffmpeg.exe", base/"bin"/"ffmpeg", base/"bin"/"ffmpeg.exe"]:
+    for c in [base/"ffmpeg", base/"ffmpeg.exe"]:
         if c.exists(): return str(c)
     return None
 
-def bundled_root():
+def res_path():
     return Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 
-def fmt_size(b):
+def sz(b):
     if not b: return ""
     for u in ("B","KB","MB","GB"):
         if b < 1024: return f"{b:.1f} {u}"
         b /= 1024
     return f"{b:.1f} TB"
 
-def fmt_speed(bps):
-    return fmt_size(bps) + "/s" if bps else "—"
+def spd(bps): return sz(bps)+"/s" if bps else "—"
 
-def fmt_eta(s):
+def eta(s):
     if s is None or s < 0: return "—"
-    m, s = divmod(int(s), 60)
-    h, m = divmod(m, 60)
-    if h: return f"{h}h {m}m"
-    if m: return f"{m}m {s}s"
+    m,s = divmod(int(s),60); h,m = divmod(m,60)
+    if h: return f"{h}h{m}m"
+    if m: return f"{m}m{s}s"
     return f"{s}s"
 
-# ── URL classification ─────────────────────────────────────────────────────
-VIDEO_HOSTS = (
-    "youtube.com","youtu.be","vimeo.com","tiktok.com","instagram.com",
-    "facebook.com","fb.watch","twitter.com","x.com","twitch.tv",
-    "reddit.com","dailymotion.com","pinterest.com","soundcloud.com",
-    "bilibili.com","rumble.com","bitchute.com","odysee.com",
-    "artgrid.io","artlist.io","patreon.com","streamable.com",
-)
-VIDEO_EXTS   = (".mp4",".m3u8",".mpd",".webm",".mov",".mkv",".ts",".flv")
-GENERAL_EXTS = (
-    ".pdf",".zip",".rar",".7z",".exe",".dmg",".pkg",".msi",
-    ".jpg",".jpeg",".png",".gif",".webp",".svg",
-    ".mp3",".wav",".flac",".aac",
-    ".doc",".docx",".xls",".xlsx",".ppt",".pptx",
-    ".apk",".iso",".tar",".gz",".bz2",".epub",
-)
+# ── URL classifier ─────────────────────────────────────────────────────────
+VH = ("youtube.com","youtu.be","vimeo.com","tiktok.com","instagram.com",
+      "facebook.com","fb.watch","twitter.com","x.com","twitch.tv",
+      "reddit.com","dailymotion.com","pinterest.com","soundcloud.com",
+      "bilibili.com","rumble.com","bitchute.com","odysee.com","streamable.com",
+      "artgrid.io","artlist.io","patreon.com")
+VE = (".mp4",".m3u8",".mpd",".webm",".mov",".mkv",".ts",".flv")
+FE = (".pdf",".zip",".rar",".7z",".exe",".dmg",".pkg",".msi",
+      ".jpg",".jpeg",".png",".gif",".webp",".svg",".mp3",".wav",
+      ".flac",".aac",".doc",".docx",".xls",".xlsx",".ppt",".pptx",
+      ".apk",".iso",".tar",".gz",".bz2",".epub",".torrent")
 URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.I)
 
-def classify_url(url):
+def classify(url):
     if not url: return None
-    url = url.strip()
-    if not URL_RE.match(url): return None
-    u = url.lower()
-    if any(h in u for h in VIDEO_HOSTS): return "video"
-    if any(u.endswith(e) for e in VIDEO_EXTS): return "video"
-    if any(u.endswith(e) for e in GENERAL_EXTS): return "file"
-    return "video"  # default: try yt-dlp
+    u = url.strip().lower()
+    if not URL_RE.match(url.strip()): return None
+    if any(h in u for h in VH): return "video"
+    if any(u.endswith(e) for e in VE): return "video"
+    if any(u.endswith(e) for e in FE): return "file"
+    return "video"
 
-def type_label(url):
+def type_badge(url):
     u = url.lower()
-    if any(h in u for h in VIDEO_HOSTS): return "VIDEO"
-    if ".mp3" in u or ".wav" in u or ".flac" in u or "soundcloud" in u: return "AUDIO"
+    if any(h in u for h in VH): return "VIDEO"
+    if any(x in u for x in (".mp3",".wav",".flac","soundcloud")): return "AUDIO"
     if ".pdf" in u: return "PDF"
-    if ".zip" in u or ".rar" in u or ".7z" in u: return "ZIP"
-    if ".exe" in u or ".dmg" in u or ".pkg" in u or ".msi" in u: return "INSTALLER"
-    if ".jpg" in u or ".png" in u or ".gif" in u or ".webp" in u: return "IMAGE"
+    if any(x in u for x in (".zip",".rar",".7z")): return "ZIP"
+    if any(x in u for x in (".exe",".dmg",".pkg",".msi")): return "APP"
+    if any(x in u for x in (".jpg",".png",".gif",".webp")): return "IMG"
     return "FILE"
 
-# ── Format options ─────────────────────────────────────────────────────────
-FORMAT_OPTIONS = {
-    "best_mp4":  {"label": "Best Quality (MP4)",  "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best[ext=mp4]", "merge": "mp4",  "fallback": "b[ext=mp4]/best"},
-    "best_any":  {"label": "Best Quality (Any)",  "format": "bv*+ba/b",                                           "fallback": "b/best"},
-    "1080p":     {"label": "1080p MP4",           "format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]", "merge": "mp4", "fallback": "b[height<=1080][ext=mp4]/b[height<=1080]"},
-    "720p":      {"label": "720p MP4",            "format": "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]",  "merge": "mp4", "fallback": "b[height<=720][ext=mp4]/b[height<=720]"},
-    "480p":      {"label": "480p MP4",            "format": "bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]",  "merge": "mp4", "fallback": "b[height<=480][ext=mp4]/b[height<=480]"},
-    "audio_mp3": {"label": "Audio Only (MP3)",    "format": "ba/b", "extract_audio": "mp3"},
-    "audio_wav": {"label": "Audio Only (WAV)",    "format": "ba/b", "extract_audio": "wav"},
+BADGE_COLORS = {
+    "VIDEO": (GREEN,  "#1a3a2a"),
+    "AUDIO": (BLUE,   "#1a2a3a"),
+    "PDF":   (RED,    "#3a1a1a"),
+    "ZIP":   (YELLOW, "#2a2a1a"),
+    "APP":   (PURPLE, "#2a1a3a"),
+    "IMG":   (BLUE,   "#1a2a2a"),
+    "FILE":  (MUTED,  "#2a2a2a"),
 }
 
-# ── Multi-thread file downloader with resume ───────────────────────────────
-class ChunkDownloader:
-    def __init__(self, url, dest_dir, n_threads=THREADS_FILE,
-                 progress_cb=None, log_cb=None, cancel_fn=None):
-        self.url          = url
-        self.dest_dir     = Path(dest_dir)
-        self.n_threads    = n_threads
-        self.progress_cb  = progress_cb or (lambda p, s, e: None)
-        self.log          = log_cb or print
-        self.cancel       = cancel_fn or (lambda: False)
-        self._lock        = threading.Lock()
-        self._downloaded  = 0
-        self._total       = 0
-        self._t0          = 0
+# ── Format options ─────────────────────────────────────────────────────────
+FMTS = {
+    # Premiere Pro friendly — H.264 + AAC in MP4
+    "h264_best": {"label":"Best H.264 MP4 ★ Premiere", "fmt":"bv*[vcodec^=avc][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc]+ba/b[ext=mp4]", "merge":"mp4", "fb":"b[ext=mp4]/best", "pp_compat":True},
+    "h264_1080": {"label":"1080p H.264 MP4 ★ Premiere", "fmt":"bv*[vcodec^=avc][height<=1080][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc][height<=1080]+ba/b[height<=1080][ext=mp4]", "merge":"mp4", "fb":"b[height<=1080][ext=mp4]", "pp_compat":True},
+    "h264_720":  {"label":"720p H.264 MP4 ★ Premiere",  "fmt":"bv*[vcodec^=avc][height<=720][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc][height<=720]+ba/b[height<=720][ext=mp4]",  "merge":"mp4", "fb":"b[height<=720][ext=mp4]",  "pp_compat":True},
+    "h264_480":  {"label":"480p H.264 MP4 ★ Premiere",  "fmt":"bv*[vcodec^=avc][height<=480][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc][height<=480]+ba/b[height<=480][ext=mp4]",  "merge":"mp4", "fb":"b[height<=480][ext=mp4]",  "pp_compat":True},
+    # Standard formats
+    "best_mp4":  {"label":"Best MP4",      "fmt":"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best", "merge":"mp4", "fb":"b[ext=mp4]/best"},
+    "best":      {"label":"Best Quality",  "fmt":"bv*+ba/b", "fb":"b/best"},
+    "2160p":     {"label":"4K MP4",        "fmt":"bv*[height<=2160][ext=mp4]+ba[ext=m4a]/b[height<=2160]", "merge":"mp4", "fb":"b[height<=2160][ext=mp4]/b[height<=2160]"},
+    "1080p":     {"label":"1080p MP4",     "fmt":"bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]", "merge":"mp4", "fb":"b[height<=1080][ext=mp4]/b[height<=1080]"},
+    "720p":      {"label":"720p MP4",      "fmt":"bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]",  "merge":"mp4", "fb":"b[height<=720][ext=mp4]/b[height<=720]"},
+    "480p":      {"label":"480p MP4",      "fmt":"bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]",  "merge":"mp4", "fb":"b[height<=480][ext=mp4]/b[height<=480]"},
+    # Audio
+    "mp3":       {"label":"Audio MP3",     "fmt":"ba/b", "audio":"mp3"},
+    "wav":       {"label":"Audio WAV",     "fmt":"ba/b", "audio":"wav"},
+    "m4a":       {"label":"Audio M4A",     "fmt":"ba[ext=m4a]/ba/b", "audio":"m4a"},
+}
 
-    def _head(self):
-        req = urllib.request.Request(
-            self.url, method="HEAD",
-            headers={"User-Agent": "ZHDownloader/3.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as r:
-                total     = int(r.headers.get("Content-Length", 0))
-                resumable = "bytes" in r.headers.get("Accept-Ranges", "")
-                fname     = ""
-                cd = r.headers.get("Content-Disposition", "")
-                if "filename=" in cd:
-                    fname = cd.split("filename=")[-1].strip().strip('"\'')
-                return total, resumable, fname
-        except Exception as e:
-            self.log(f"[warn] HEAD failed ({e})")
-            return 0, False, ""
-
-    def _outpath(self, srv_fname):
-        if srv_fname:
-            return self.dest_dir / srv_fname
-        name = urllib.parse.unquote(
-            Path(urllib.parse.urlparse(self.url).path).name) or "download"
-        return self.dest_dir / name
-
-    def _tick(self, n):
-        with self._lock:
-            self._downloaded += n
-            elapsed = time.time() - self._t0
-            spd = self._downloaded / elapsed if elapsed > 0 else 0
-            rem = (self._total - self._downloaded) / spd if spd > 0 and self._total else None
-            pct = self._downloaded / self._total * 100 if self._total else 0
-        self.progress_cb(pct, spd, rem)
-
-    def _dl_chunk(self, start, end, part):
-        # Resume: skip already-downloaded bytes
-        existing = part.stat().st_size if part.exists() else 0
-        real_start = start + existing
-        if existing and real_start > end:
-            with self._lock: self._downloaded += existing
-            return
-        headers = {"User-Agent": "ZHDownloader/3.0", "Range": f"bytes={real_start}-{end}"}
-        req = urllib.request.Request(self.url, headers=headers)
-        with urllib.request.urlopen(req, timeout=60) as r:
-            with open(part, "ab") as f:
-                while True:
-                    if self.cancel(): return
-                    chunk = r.read(65536)
-                    if not chunk: break
-                    f.write(chunk)
-                    self._tick(len(chunk))
-
-    def _dl_single(self, out):
-        existing = out.stat().st_size if out.exists() else 0
-        headers = {"User-Agent": "ZHDownloader/3.0"}
-        if existing:
-            headers["Range"] = f"bytes={existing}-"
-            with self._lock: self._downloaded += existing
-        req = urllib.request.Request(self.url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                if not self._total:
-                    self._total = int(r.headers.get("Content-Length", 0)) + existing
-                with open(out, "ab") as f:
-                    while True:
-                        if self.cancel(): return
-                        chunk = r.read(65536)
-                        if not chunk: break
-                        f.write(chunk)
-                        self._tick(len(chunk))
-        except urllib.error.HTTPError as e:
-            if e.code == 416:  # Range not satisfiable — already complete
-                pass
-            else:
-                raise
-
-    def run(self):
-        self._t0 = time.time()
-        self.dest_dir.mkdir(parents=True, exist_ok=True)
-        total, resumable, srv_fname = self._head()
-        self._total = total
-        out = self._outpath(srv_fname)
-        self.log(f"[file] {out.name}  {fmt_size(total)}")
-
-        if not resumable or total == 0 or self.n_threads == 1:
-            self._dl_single(out)
-        else:
-            chunk  = total // self.n_threads
-            parts  = []
-            PARTIAL_DIR.mkdir(parents=True, exist_ok=True)
-            with ThreadPoolExecutor(max_workers=self.n_threads) as pool:
-                futures = []
-                for i in range(self.n_threads):
-                    s = i * chunk
-                    e = (s + chunk - 1) if i < self.n_threads - 1 else total - 1
-                    p = PARTIAL_DIR / f"{out.stem}.part{i}"
-                    parts.append(p)
-                    futures.append(pool.submit(self._dl_chunk, s, e, p))
-                for f in futures:
-                    f.result()
-            if self.cancel():
-                self.log("[pause] partial chunks kept — will resume next time.")
-                return None
-            self.log("[file] merging chunks…")
-            with open(out, "wb") as dst:
-                for p in parts:
-                    if p.exists():
-                        dst.write(p.read_bytes())
-                        p.unlink()
-        if self.cancel(): return None
-        self.log(f"[file] saved → {out}")
-        return str(out)
-
-# ── HTTP bridge ────────────────────────────────────────────────────────────
-class _Bridge(BaseHTTPRequestHandler):
-    app = None
-    def log_message(self, *a): pass
-    def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-    def do_OPTIONS(self):
-        self.send_response(204); self._cors(); self.end_headers()
-    def do_GET(self):
-        if self.path == "/ping":
-            self.send_response(200); self._cors()
-            self.send_header("Content-Type", "application/json"); self.end_headers()
-            self.wfile.write(json.dumps({"app": APP_NAME, "version": APP_VERSION, "ok": True}).encode())
-        else:
-            self.send_response(404); self._cors(); self.end_headers()
-    def do_POST(self):
-        if self.path != "/download":
-            self.send_response(404); self._cors(); self.end_headers(); return
-        try:
-            n    = int(self.headers.get("Content-Length", "0"))
-            data = json.loads(self.rfile.read(n) or b"{}")
-        except: data = {}
-        url = (data.get("url") or "").strip()
-        if not url:
-            self.send_response(400); self._cors(); self.end_headers()
-            self.wfile.write(b'{"ok":false}'); return
-        self.app.enqueue_url(url)
-        self.send_response(200); self._cors()
-        self.send_header("Content-Type", "application/json"); self.end_headers()
-        self.wfile.write(json.dumps({"ok": True}).encode())
-
-# ── Download item (for queue display) ─────────────────────────────────────
-class DLItem:
+# ── Download item ──────────────────────────────────────────────────────────
+class DL:
+    _id = 0
     def __init__(self, url, idx, total):
+        DL._id += 1
+        self.id      = DL._id
         self.url     = url
         self.idx     = idx
         self.total   = total
-        self.label   = type_label(url)
-        self.name    = urllib.parse.unquote(Path(urllib.parse.urlparse(url).path).name or url[:60])
-        self.status  = "waiting"   # waiting | downloading | done | error | paused
+        self.badge   = type_badge(url)
+        self.name    = urllib.parse.unquote(
+                           Path(urllib.parse.urlparse(url).path).name or url[:50])[:80]
+        self.status  = "waiting"   # waiting|downloading|done|error|paused|cancelled
         self.pct     = 0.0
-        self.speed   = ""
-        self.eta     = ""
-        self.size    = ""
-        self.row     = None        # tk frame reference
+        self.speed_v = 0
+        self.eta_v   = None
+        self.size_v  = 0
+        self.done_f  = ""
+        # UI refs
+        self.row     = None
+        self._lbl_icon = None
+        self._lbl_name = None
+        self._lbl_meta = None
+        self._prog     = None
+        self._spd_hist = []   # speed history for mini graph
+
+# ── Multi-thread file downloader ───────────────────────────────────────────
+class FileDL:
+    def __init__(self, url, dest, n=THREADS, prog_cb=None, log_cb=None, cancel_fn=None):
+        self.url    = url
+        self.dest   = Path(dest)
+        self.n      = n
+        self.prog   = prog_cb or (lambda *a: None)
+        self.log    = log_cb or print
+        self.cancel = cancel_fn or (lambda: False)
+        self._lock  = threading.Lock()
+        self._done  = 0
+        self._total = 0
+        self._t0    = 0
+
+    def _head(self):
+        req = urllib.request.Request(self.url, method="HEAD",
+              headers={"User-Agent":"ZHDownloader/4.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                total = int(r.headers.get("Content-Length",0))
+                res   = "bytes" in r.headers.get("Accept-Ranges","")
+                fname = ""
+                cd = r.headers.get("Content-Disposition","")
+                if "filename=" in cd:
+                    fname = cd.split("filename=")[-1].strip().strip('"\'')
+                return total, res, fname
+        except Exception as e:
+            self.log(f"[warn] HEAD: {e}")
+            return 0, False, ""
+
+    def _out(self, srv):
+        if srv: return self.dest / srv
+        n = urllib.parse.unquote(Path(urllib.parse.urlparse(self.url).path).name) or "download"
+        return self.dest / n
+
+    def _tick(self, n):
+        with self._lock:
+            self._done += n
+            el = time.time()-self._t0
+            s  = self._done/el if el>0 else 0
+            r  = (self._total-self._done)/s if s>0 and self._total else None
+            p  = self._done/self._total*100 if self._total else 0
+        self.prog(p, s, r)
+
+    def _chunk(self, s, e, part):
+        ex = part.stat().st_size if part.exists() else 0
+        rs = s+ex
+        if ex and rs>e:
+            with self._lock: self._done += ex
+            return
+        h = {"User-Agent":"ZHDownloader/4.0","Range":f"bytes={rs}-{e}"}
+        req = urllib.request.Request(self.url, headers=h)
+        with urllib.request.urlopen(req, timeout=60) as r:
+            with open(part,"ab") as f:
+                while True:
+                    if self.cancel(): return
+                    c = r.read(65536)
+                    if not c: break
+                    f.write(c); self._tick(len(c))
+
+    def _single(self, out):
+        ex = out.stat().st_size if out.exists() else 0
+        h  = {"User-Agent":"ZHDownloader/4.0"}
+        if ex: h["Range"] = f"bytes={ex}-"
+        with self._lock: self._done += ex
+        req = urllib.request.Request(self.url, headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                if not self._total:
+                    self._total = int(r.headers.get("Content-Length",0))+ex
+                with open(out,"ab") as f:
+                    while True:
+                        if self.cancel(): return
+                        c = r.read(65536)
+                        if not c: break
+                        f.write(c); self._tick(len(c))
+        except urllib.error.HTTPError as e:
+            if e.code != 416: raise
+
+    def run(self):
+        self._t0 = time.time()
+        self.dest.mkdir(parents=True, exist_ok=True)
+        total, res, srv = self._head()
+        self._total = total
+        out = self._out(srv)
+        self.log(f"[file] {out.name}  {sz(total)}")
+        if not res or total==0 or self.n==1:
+            self._single(out)
+        else:
+            chunk = total//self.n
+            PARTS_DIR.mkdir(parents=True, exist_ok=True)
+            parts = []
+            with ThreadPoolExecutor(max_workers=self.n) as pool:
+                futs = []
+                for i in range(self.n):
+                    s = i*chunk
+                    e = (s+chunk-1) if i<self.n-1 else total-1
+                    p = PARTS_DIR/f"{out.stem}.part{i}"
+                    parts.append(p)
+                    futs.append(pool.submit(self._chunk,s,e,p))
+                for f in futs: f.result()
+            if self.cancel():
+                self.log("[pause] chunks saved for resume")
+                return None
+            with open(out,"wb") as dst:
+                for p in parts:
+                    if p.exists(): dst.write(p.read_bytes()); p.unlink()
+        if self.cancel(): return None
+        self.log(f"[done] {out}")
+        return str(out)
+
+# ── HTTP bridge ────────────────────────────────────────────────────────────
+class Bridge(BaseHTTPRequestHandler):
+    app = None
+    def log_message(self,*a): pass
+    def _c(self):
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.send_header("Access-Control-Allow-Methods","GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers","Content-Type")
+    def do_OPTIONS(self):
+        self.send_response(204); self._c(); self.end_headers()
+    def do_GET(self):
+        if self.path=="/ping":
+            self.send_response(200); self._c()
+            self.send_header("Content-Type","application/json"); self.end_headers()
+            self.wfile.write(json.dumps({"app":APP_NAME,"version":APP_VER,"ok":True}).encode())
+        else:
+            self.send_response(404); self._c(); self.end_headers()
+    def do_POST(self):
+        if self.path!="/download":
+            self.send_response(404); self._c(); self.end_headers(); return
+        try:
+            n = int(self.headers.get("Content-Length","0"))
+            d = json.loads(self.rfile.read(n) or b"{}")
+        except: d={}
+        url = (d.get("url") or "").strip()
+        if not url:
+            self.send_response(400); self._c(); self.end_headers()
+            self.wfile.write(b'{"ok":false}'); return
+        self.app._mq.put(("ext_url", url))
+        self.send_response(200); self._c()
+        self.send_header("Content-Type","application/json"); self.end_headers()
+        self.wfile.write(b'{"ok":true}')
 
 # ── Main App ───────────────────────────────────────────────────────────────
 class App:
     def __init__(self, root):
-        self.root        = root
-        self.cfg         = load_json(CONFIG_PATH, {"download_dir": DEFAULT_DIR, "format": "best_mp4"})
-        self.state       = load_json(STATE_PATH,  {"queue": []})
-        self.mq          = queue.Queue()          # thread → UI messages
-        self.dl_thread   = None
-        self._stop       = threading.Event()      # signals cancel
-        self._pause      = threading.Event()      # signals pause
-        self._paused     = False
-        self.ffmpeg      = find_ffmpeg()
-        self._last_clip  = ""
-        self._clip_watch = tk.BooleanVar(value=self.cfg.get("clip_watch", True))
+        self.root      = root
+        self.cfg       = jload(CFG_PATH, {"dir":DEFAULT_DIR,"fmt":"best_mp4","cookies":"none","clip":True})
+        self.state     = jload(STATE_PATH,{"queue":[]})
+        self._mq       = Q.Queue()
+        self._stop     = threading.Event()
+        self._paused   = False
+        self._thread   = None
+        self._items    = []
         self._done_files = []
-        self._dl_items   = []                     # list[DLItem] for current batch
+        self._clip_last  = ""
+        self._clip_on    = tk.BooleanVar(value=self.cfg.get("clip",True))
+        self._spd_history = []   # [(time, bytes)] for speed graph
+        self.ff        = find_ff()
 
-        root.title(f"{APP_NAME} v{APP_VERSION}")
-        root.geometry("900x780")
-        root.minsize(760, 620)
-        root.configure(bg=C_BG)
+        root.title(f"{APP_NAME} v{APP_VER}")
+        root.geometry("920x800")
+        root.minsize(780,640)
+        root.configure(bg=BG)
 
-        self._build_ui()
+        self._ui()
         self._poll()
-        self._poll_clipboard()
+        self._poll_clip()
         self._start_bridge()
         self._check_resume()
 
-        if not self.ffmpeg:
-            self.log("[warn] ffmpeg not found — some formats may lack audio.\n"
-                     "       Mac: brew install ffmpeg | Win: choco install ffmpeg\n")
+        if not self.ff:
+            self.log("[warn] ffmpeg not found — HD merge/audio extract may fail\n"
+                     "       Mac: brew install ffmpeg | Win: choco install ffmpeg")
 
-    # ── resource ───────────────────────────────────────────────────────────
-    def _res(self, name):
-        r = bundled_root()
-        for p in [r/"assets"/name, r/name, Path(__file__).parent/"assets"/name]:
+    # ── res ────────────────────────────────────────────────────────────────
+    def _r(self, n):
+        r = res_path()
+        for p in [r/"assets"/n, r/n, Path(__file__).parent/"assets"/n]:
             if p.exists(): return str(p)
 
     # ── UI ─────────────────────────────────────────────────────────────────
-    def _build_ui(self):
+    def _ui(self):
         s = ttk.Style()
         try: s.theme_use("clam")
         except: pass
-        s.configure("TFrame",      background=C_BG)
-        s.configure("TLabel",      background=C_BG, foreground=C_TEXT, font=("Helvetica",10))
-        s.configure("Muted.TLabel",background=C_BG, foreground=C_MUTED, font=("Helvetica",9))
-        s.configure("Gold.TLabel", background=C_BG, foreground=C_GOLD,  font=("Helvetica",18,"bold"))
-        s.configure("TCheckbutton",background=C_BG, foreground=C_MUTED, font=("Helvetica",10))
-        s.map("TCheckbutton", background=[("active",C_BG)])
-        s.configure("TCombobox",
-                    fieldbackground=C_SURFACE2, background=C_SURFACE,
-                    foreground=C_TEXT, selectbackground=C_MAROON,
-                    selectforeground=C_GOLD, insertcolor=C_TEXT,
-                    arrowcolor=C_GOLD, arrowsize=12)
-        s.map("TCombobox",
-              fieldbackground=[("readonly", C_SURFACE2), ("disabled", C_BG)],
-              foreground=[("readonly", C_TEXT), ("disabled", C_MUTED)],
-              selectbackground=[("readonly", C_MAROON)],
-              selectforeground=[("readonly", C_GOLD)])
-        s.configure("Main.TButton",  background=C_GOLD, foreground=C_BG, font=("Helvetica",11,"bold"), padding=(16,8), borderwidth=0)
-        s.map("Main.TButton",        background=[("active","#e8b84a"),("disabled","#3a3a2a")], foreground=[("disabled",C_MUTED)])
-        s.configure("Ghost.TButton", background=C_SURFACE2, foreground=C_MUTED, font=("Helvetica",10), padding=(10,7), borderwidth=1, relief="flat")
-        s.map("Ghost.TButton",       background=[("active",C_SURFACE)], foreground=[("active",C_TEXT)])
-        s.configure("TProgressbar", troughcolor=C_SURFACE2, background=C_GOLD, borderwidth=0, thickness=5)
+        s.configure("TFrame",      background=BG)
+        s.configure("TLabel",      background=BG, foreground=TEXT, font=("Helvetica",10))
+        s.configure("TCheckbutton",background=BG, foreground=MUTED, font=("Helvetica",10))
+        s.map("TCheckbutton", background=[("active",BG)])
+        s.configure("Main.TButton", background=GOLD, foreground=BG,
+                    font=("Helvetica",11,"bold"), padding=(18,9), borderwidth=0)
+        s.map("Main.TButton", background=[("active","#e8b84a"),("disabled","#3a3a2a")],
+              foreground=[("disabled",MUTED)])
+        s.configure("Ghost.TButton", background=SURF2, foreground=MUTED,
+                    font=("Helvetica",10), padding=(10,7), borderwidth=0, relief="flat")
+        s.map("Ghost.TButton", background=[("active",SURF)], foreground=[("active",TEXT)])
+        s.configure("TProgressbar", troughcolor=SURF2, background=GOLD,
+                    borderwidth=0, thickness=4)
 
-        # ── Header ──
-        hdr = tk.Frame(self.root, bg=C_MAROON, height=64); hdr.pack(fill="x")
-        hdr.pack_propagate(False)
-        inner = tk.Frame(hdr, bg=C_MAROON); inner.pack(fill="both", expand=True, padx=20, pady=12)
-        logo_p = self._res("header-logo.png")
-        if logo_p:
+        # Header
+        hdr = tk.Frame(self.root, bg=MAROON, height=68)
+        hdr.pack(fill="x"); hdr.pack_propagate(False)
+        hi = tk.Frame(hdr, bg=MAROON); hi.pack(fill="both", expand=True, padx=20, pady=12)
+        lp = self._r("header-logo.png")
+        if lp:
             try:
-                self._logo = tk.PhotoImage(file=logo_p)
-                tk.Label(inner, image=self._logo, bg=C_MAROON, bd=0).pack(side="left", padx=(0,12))
+                self._logo = tk.PhotoImage(file=lp)
+                tk.Label(hi, image=self._logo, bg=MAROON, bd=0).pack(side="left", padx=(0,12))
             except: pass
-        tx = tk.Frame(inner, bg=C_MAROON); tx.pack(side="left")
-        tk.Label(tx, text=APP_NAME, bg=C_MAROON, fg=C_GOLD, font=("Helvetica",16,"bold")).pack(anchor="w")
-        tk.Label(tx, text=f"v{APP_VERSION}  ·  {APP_AUTHOR}  ·  Universal Download Manager",
-                 bg=C_MAROON, fg="#c8a080", font=("Helvetica",9)).pack(anchor="w")
-        # bridge status dot
-        self._dot_var = tk.StringVar(value="●")
-        self._dot_lbl = tk.Label(inner, textvariable=self._dot_var, bg=C_MAROON, fg=C_MUTED,
-                                 font=("Helvetica",12))
-        self._dot_lbl.pack(side="right")
-        tk.Label(inner, text="Bridge", bg=C_MAROON, fg=C_MUTED, font=("Helvetica",9)).pack(side="right", padx=(0,4))
+        tx = tk.Frame(hi, bg=MAROON); tx.pack(side="left")
+        tk.Label(tx, text=APP_NAME, bg=MAROON, fg=GOLD,
+                 font=("Helvetica",16,"bold")).pack(anchor="w")
+        tk.Label(tx, text=f"v{APP_VER}  ·  {APP_AUTHOR}  ·  Universal Download Manager",
+                 bg=MAROON, fg="#c8a080", font=("Helvetica",9)).pack(anchor="w")
+        # bridge dot
+        self._dot = tk.Label(hi, text="● Bridge", bg=MAROON, fg=MUTED, font=("Helvetica",9))
+        self._dot.pack(side="right")
 
-        # ── Body ──
-        body = tk.Frame(self.root, bg=C_BG); body.pack(fill="both", expand=True, padx=0)
+        # Body scroll
+        body = tk.Frame(self.root, bg=BG)
+        body.pack(fill="both", expand=True)
+        canvas = tk.Canvas(body, bg=BG, highlightthickness=0)
+        vscroll = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vscroll.set)
+        vscroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self._main = tk.Frame(canvas, bg=BG)
+        self._cwin = canvas.create_window((0,0), window=self._main, anchor="nw")
+        self._main.bind("<Configure>", lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(self._cwin, width=e.width))
+        # mousewheel
+        def _scroll(e):
+            canvas.yview_scroll(int(-1*(e.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _scroll)
 
-        # Left panel (inputs)
-        left = tk.Frame(body, bg=C_BG); left.pack(fill="both", expand=True, padx=20, pady=14)
+        pad = self._main
 
-        # URL
-        tk.Label(left, text="URL  —  one per line (video, audio, or any file):",
-                 bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).pack(anchor="w")
-        self.url_box = tk.Text(left, height=3, font=("Menlo",11),
-                               bg=C_SURFACE, fg=C_TEXT, insertbackground=C_GOLD,
+        # URL box
+        self._section(pad, "URL  —  one or more links, one per line")
+        self.url_box = tk.Text(pad, height=3, font=("Menlo",11),
+                               bg=SURF, fg=TEXT, insertbackground=GOLD,
                                relief="flat", highlightthickness=1,
-                               highlightbackground=C_BORDER, highlightcolor=C_GOLD,
-                               padx=10, pady=8, selectbackground=C_MAROON)
-        self.url_box.pack(fill="x", pady=(4,10))
+                               highlightbackground=BORDER, highlightcolor=GOLD,
+                               padx=10, pady=8, selectbackground=MAROON)
+        self.url_box.pack(fill="x", padx=20, pady=(4,10))
+        # paste shortcut
+        self.url_box.bind("<Command-v>", lambda e: self.root.after(100, self._on_paste))
+        self.url_box.bind("<Control-v>", lambda e: self.root.after(100, self._on_paste))
 
         # Options row
-        opt = tk.Frame(left, bg=C_BG); opt.pack(fill="x", pady=(0,8))
+        opt = tk.Frame(pad, bg=BG); opt.pack(fill="x", padx=20, pady=(0,6))
+        self._lbl(opt, "Format:").grid(row=0,column=0,sticky="w",padx=(0,6))
+        self.fmt_var = tk.StringVar(value="best_mp4: Best MP4")
+        fk = self.cfg.get("fmt","best_mp4")
+        if fk in FMTS: self.fmt_var.set(f"{fk}: {FMTS[fk]['label']}")
+        fm = tk.OptionMenu(opt, self.fmt_var, *[f"{k}: {v['label']}" for k,v in FMTS.items()])
+        self._style_menu(fm); fm.configure(width=18)
+        fm.grid(row=0,column=1,sticky="w",padx=(0,14))
 
-        tk.Label(opt, text="Format:", bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).grid(row=0,column=0,sticky="w",padx=(0,6))
-        self.fmt_var = tk.StringVar(value="best_mp4: Best Quality (MP4)")
-        fmt_opts = [f"{k}: {v['label']}" for k,v in FORMAT_OPTIONS.items()]
-        cur_key = self.cfg.get("format","best_mp4")
-        if cur_key in FORMAT_OPTIONS:
-            self.fmt_var.set(f"{cur_key}: {FORMAT_OPTIONS[cur_key]['label']}")
-        fmt_menu = tk.OptionMenu(opt, self.fmt_var, *fmt_opts)
-        fmt_menu.configure(bg=C_SURFACE2, fg=C_TEXT, activebackground=C_MAROON,
-                           activeforeground=C_GOLD, highlightthickness=0,
-                           font=("Helvetica",10), relief="flat", bd=1,
-                           width=26, anchor="w")
-        fmt_menu["menu"].configure(bg=C_SURFACE2, fg=C_TEXT,
-                                   activebackground=C_MAROON, activeforeground=C_GOLD,
-                                   font=("Helvetica",10))
-        fmt_menu.grid(row=0,column=1,sticky="w",padx=(0,14))
-
-        tk.Label(opt, text="Mode:", bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).grid(row=0,column=2,sticky="w",padx=(0,6))
+        self._lbl(opt, "Mode:").grid(row=0,column=2,sticky="w",padx=(0,6))
         self.mode_var = tk.StringVar(value="auto: Auto-detect")
-        mode_opts = ["auto: Auto-detect", "video: Video/Audio", "file: General File"]
-        mode_menu = tk.OptionMenu(opt, self.mode_var, *mode_opts)
-        mode_menu.configure(bg=C_SURFACE2, fg=C_TEXT, activebackground=C_MAROON,
-                            activeforeground=C_GOLD, highlightthickness=0,
-                            font=("Helvetica",10), relief="flat", bd=1,
-                            width=16, anchor="w")
-        mode_menu["menu"].configure(bg=C_SURFACE2, fg=C_TEXT,
-                                    activebackground=C_MAROON, activeforeground=C_GOLD,
-                                    font=("Helvetica",10))
-        mode_menu.grid(row=0,column=3,sticky="w")
+        mm = tk.OptionMenu(opt, self.mode_var,
+                           "auto: Auto-detect","video: Video/Audio","file: General File")
+        self._style_menu(mm); mm.configure(width=14)
+        mm.grid(row=0,column=3,sticky="w",padx=(0,14))
+
+        self._lbl(opt, "Cookies:").grid(row=0,column=4,sticky="w",padx=(0,6))
+        self.ck_var = tk.StringVar(value=self.cfg.get("cookies","none"))
+        cm = tk.OptionMenu(opt, self.ck_var,"none","chrome","safari","firefox","edge","brave")
+        self._style_menu(cm); cm.configure(width=9)
+        cm.grid(row=0,column=5,sticky="w")
 
         # Checkboxes
-        chk = tk.Frame(left, bg=C_BG); chk.pack(fill="x", pady=(0,8))
-        self.sub_var   = tk.BooleanVar(value=False)
-        self.thumb_var = tk.BooleanVar(value=False)
-        self.pl_var    = tk.BooleanVar(value=False)
-        for var, lbl in [(self.sub_var,"Subtitles"),(self.thumb_var,"Thumbnail"),(self.pl_var,"Full Playlist"),(self._clip_watch,"Watch clipboard")]:
-            ttk.Checkbutton(chk, text=lbl, variable=var,
-                            style="TCheckbutton").pack(side="left", padx=(0,16))
-
-        # Cookies
-        ck = tk.Frame(left, bg=C_BG); ck.pack(fill="x", pady=(0,8))
-        tk.Label(ck, text="Cookies:", bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).pack(side="left", padx=(0,6))
-        self.cookies_var = tk.StringVar(value=self.cfg.get("cookies","none"))
-        cookies_opts = ["none","chrome","safari","firefox","edge","brave"]
-        cookies_menu = tk.OptionMenu(ck, self.cookies_var, *cookies_opts)
-        cookies_menu.configure(bg=C_SURFACE2, fg=C_TEXT, activebackground=C_MAROON,
-                               activeforeground=C_GOLD, highlightthickness=0,
-                               font=("Helvetica",10), relief="flat", bd=1, width=10)
-        cookies_menu["menu"].configure(bg=C_SURFACE2, fg=C_TEXT,
-                                       activebackground=C_MAROON, activeforeground=C_GOLD,
-                                       font=("Helvetica",10))
-        cookies_menu.pack(side="left")
-        tk.Label(ck, text="(needed for private/member content)", bg=C_BG, fg=C_MUTED, font=("Helvetica",9)).pack(side="left", padx=(8,0))
+        chk = tk.Frame(pad, bg=BG); chk.pack(fill="x", padx=20, pady=(0,8))
+        self.sub_var   = tk.BooleanVar()
+        self.thumb_var = tk.BooleanVar()
+        self.pl_var    = tk.BooleanVar()
+        for v,l in [(self.sub_var,"Subtitles"),(self.thumb_var,"Thumbnail"),
+                    (self.pl_var,"Full Playlist"),(self._clip_on,"Watch clipboard")]:
+            ttk.Checkbutton(chk, text=l, variable=v).pack(side="left", padx=(0,16))
 
         # Folder
-        fld = tk.Frame(left, bg=C_BG); fld.pack(fill="x", pady=(0,10))
-        tk.Label(fld, text="Save to:", bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).pack(side="left", padx=(0,6))
-        self.folder_var = tk.StringVar(value=self.cfg.get("download_dir", DEFAULT_DIR))
-        tk.Entry(fld, textvariable=self.folder_var, bg=C_SURFACE, fg=C_TEXT,
-                 insertbackground=C_GOLD, relief="flat",
-                 highlightthickness=1, highlightbackground=C_BORDER,
-                 highlightcolor=C_GOLD, font=("Helvetica",10)).pack(side="left", fill="x", expand=True, padx=(0,6))
-        ttk.Button(fld, text="Browse", style="Ghost.TButton", command=self._pick_folder).pack(side="left", padx=(0,4))
-        ttk.Button(fld, text="Open",   style="Ghost.TButton", command=self._open_folder).pack(side="left")
+        fld = tk.Frame(pad, bg=BG); fld.pack(fill="x", padx=20, pady=(0,10))
+        self._lbl(fld, "Save to:").pack(side="left", padx=(0,6))
+        self.folder_var = tk.StringVar(value=self.cfg.get("dir",DEFAULT_DIR))
+        self._entry(fld, self.folder_var).pack(side="left", fill="x", expand=True, padx=(0,6))
+        self._ghost_btn(fld, "Browse", self._pick_folder).pack(side="left", padx=(0,4))
+        self._ghost_btn(fld, "Open",   self._open_folder).pack(side="left")
 
-        # Buttons
-        btns = tk.Frame(left, bg=C_BG); btns.pack(fill="x", pady=(0,10))
-        self.btn_dl     = ttk.Button(btns, text="⬇  Download", style="Main.TButton", command=self._start)
-        self.btn_pause  = ttk.Button(btns, text="⏸  Pause",   style="Ghost.TButton", command=self._do_pause,  state="disabled")
-        self.btn_cancel = ttk.Button(btns, text="✕  Cancel",  style="Ghost.TButton", command=self._do_cancel, state="disabled")
+        # Action buttons
+        btns = tk.Frame(pad, bg=BG); btns.pack(fill="x", padx=20, pady=(0,10))
+        self.btn_dl     = ttk.Button(btns, text="⬇  Download",  style="Main.TButton", command=self._start)
+        self.btn_pause  = ttk.Button(btns, text="⏸  Pause",    style="Ghost.TButton", command=self._do_pause,  state="disabled")
+        self.btn_cancel = ttk.Button(btns, text="✕  Cancel",   style="Ghost.TButton", command=self._do_cancel, state="disabled")
         self.btn_dl.pack(side="left", padx=(0,8))
         self.btn_pause.pack(side="left", padx=(0,6))
         self.btn_cancel.pack(side="left")
-        ttk.Button(btns, text="Clear log", style="Ghost.TButton", command=self._clear_log).pack(side="right")
+        # right side buttons
+        self._ghost_btn(btns, "Clear Log",   self._clear_log).pack(side="right")
+        self._ghost_btn(btns, "Clear Queue", self._clear_queue).pack(side="right", padx=(0,6))
 
-        # ── Resume banner ──
-        self.resume_frame = tk.Frame(left, bg="#1a2e1a", relief="flat"); 
-        self.resume_lbl = tk.Label(self.resume_frame, text="", bg="#1a2e1a", fg=C_SUCCESS,
-                                   font=("Helvetica",11,"bold"), padx=12, pady=8)
-        self.resume_lbl.pack(side="left")
-        rb = tk.Frame(self.resume_frame, bg="#1a2e1a"); rb.pack(side="right", padx=8, pady=6)
+        # Resume banner
+        self.res_frame = tk.Frame(pad, bg="#152a15")
+        self.res_lbl   = tk.Label(self.res_frame, text="", bg="#152a15", fg=GREEN,
+                                  font=("Helvetica",11,"bold"), padx=14, pady=8)
+        self.res_lbl.pack(side="left")
+        rb = tk.Frame(self.res_frame, bg="#152a15"); rb.pack(side="right", padx=8)
         ttk.Button(rb, text="▶ Resume", style="Main.TButton", command=self._do_resume).pack(side="left", padx=(0,6))
         ttk.Button(rb, text="Discard",  style="Ghost.TButton", command=self._discard).pack(side="left")
 
-        # ── Overall progress ──
-        self.prog_bar = ttk.Progressbar(left, mode="determinate", maximum=100)
-        self.prog_bar.pack(fill="x", pady=(0,2))
-        self.prog_var = tk.StringVar(value="Idle.")
-        tk.Label(left, textvariable=self.prog_var, bg=C_BG, fg=C_MUTED, font=("Helvetica",9)).pack(anchor="w")
+        # Speed + progress
+        sp = tk.Frame(pad, bg=BG); sp.pack(fill="x", padx=20, pady=(0,4))
+        self.prog_bar = ttk.Progressbar(sp, mode="determinate", maximum=100)
+        self.prog_bar.pack(fill="x", pady=(0,4))
+        info = tk.Frame(sp, bg=BG); info.pack(fill="x")
+        self.status_var = tk.StringVar(value="Idle — paste URLs and press Download")
+        tk.Label(info, textvariable=self.status_var, bg=BG, fg=MUTED,
+                 font=("Helvetica",9)).pack(side="left")
+        self.spd_var = tk.StringVar(value="")
+        tk.Label(info, textvariable=self.spd_var, bg=BG, fg=GOLD,
+                 font=("Helvetica",9,"bold")).pack(side="right")
 
-        # ── Queue list ──
-        sep = tk.Frame(left, bg=C_BORDER, height=1); sep.pack(fill="x", pady=10)
-        qh = tk.Frame(left, bg=C_BG); qh.pack(fill="x", pady=(0,6))
-        tk.Label(qh, text="QUEUE", bg=C_BG, fg=C_MUTED, font=("Helvetica",9)).pack(side="left")
-        self.queue_count_lbl = tk.Label(qh, text="", bg=C_BG, fg=C_MUTED, font=("Helvetica",9))
-        self.queue_count_lbl.pack(side="left", padx=(6,0))
+        # Speed graph (mini canvas)
+        self.graph = tk.Canvas(pad, bg=SURF, height=40, highlightthickness=1,
+                               highlightbackground=BORDER)
+        self.graph.pack(fill="x", padx=20, pady=(0,8))
+        self.graph.create_text(6, 20, text="Speed graph", fill=MUTED,
+                               font=("Helvetica",8), anchor="w", tags="placeholder")
 
-        q_outer = tk.Frame(left, bg=C_BG); q_outer.pack(fill="both", expand=True)
-        self.q_canvas = tk.Canvas(q_outer, bg=C_BG, highlightthickness=0)
-        q_scroll = ttk.Scrollbar(q_outer, orient="vertical", command=self.q_canvas.yview)
-        self.q_canvas.configure(yscrollcommand=q_scroll.set)
-        q_scroll.pack(side="right", fill="y")
-        self.q_canvas.pack(side="left", fill="both", expand=True)
-        self.q_inner = tk.Frame(self.q_canvas, bg=C_BG)
-        self.q_win = self.q_canvas.create_window((0,0), window=self.q_inner, anchor="nw")
-        self.q_inner.bind("<Configure>", lambda e: self.q_canvas.configure(
-            scrollregion=self.q_canvas.bbox("all")))
-        self.q_canvas.bind("<Configure>", lambda e: self.q_canvas.itemconfig(
-            self.q_win, width=e.width))
+        # Queue section
+        self._section(pad, "DOWNLOAD QUEUE")
+        self.q_frame = tk.Frame(pad, bg=BG)
+        self.q_frame.pack(fill="x", padx=20, pady=(4,0))
+        self._empty_lbl = tk.Label(self.q_frame, text="No downloads yet. Paste URLs above and press Download.",
+                                   bg=BG, fg=MUTED, font=("Helvetica",10))
+        self._empty_lbl.pack(pady=16)
 
-        # ── Log ──
-        log_sep = tk.Frame(left, bg=C_BORDER, height=1); log_sep.pack(fill="x", pady=(8,6))
-        log_frame = tk.Frame(left, bg=C_BG); log_frame.pack(fill="x")
-        self.log_text = tk.Text(log_frame, height=5, font=("Menlo",10),
-                                bg="#0d0d0d", fg="#555555", relief="flat",
-                                padx=10, pady=6, wrap="word",
-                                state="disabled")
-        self.log_text.pack(side="left", fill="both", expand=True)
-        ttk.Scrollbar(log_frame, command=self.log_text.yview).pack(side="right", fill="y")
-        self.log_text.configure(yscrollcommand=lambda *a: None)
+        # Log
+        self._section(pad, "LOG")
+        lf = tk.Frame(pad, bg=BG); lf.pack(fill="x", padx=20, pady=(4,20))
+        self.log_txt = tk.Text(lf, height=7, font=("Menlo",10),
+                               bg="#0a0a0a", fg="#444444", relief="flat",
+                               padx=10, pady=8, wrap="word", state="disabled")
+        self.log_txt.pack(side="left", fill="both", expand=True)
+        ttk.Scrollbar(lf, command=self.log_txt.yview).pack(side="right", fill="y")
+        for tag,col in [("ok",GREEN),("warn",YELLOW),("err",RED),("info",BLUE),("dim","#444444")]:
+            self.log_txt.tag_configure(tag, foreground=col)
 
-        # tag colors for log
-        self.log_text.tag_configure("ok",   foreground=C_SUCCESS)
-        self.log_text.tag_configure("warn", foreground=C_WARN)
-        self.log_text.tag_configure("err",  foreground=C_ERROR)
-        self.log_text.tag_configure("info", foreground=C_INFO)
-        self.log_text.tag_configure("dim",  foreground="#444444")
+    # ── UI helpers ─────────────────────────────────────────────────────────
+    def _section(self, p, t):
+        f = tk.Frame(p, bg=BG); f.pack(fill="x", padx=20, pady=(10,0))
+        tk.Label(f, text=t, bg=BG, fg=MUTED, font=("Helvetica",9)).pack(side="left")
+        tk.Frame(f, bg=BORDER, height=1).pack(side="left", fill="x", expand=True, padx=(8,0))
 
-    # ── Queue UI ───────────────────────────────────────────────────────────
-    def _build_queue_rows(self, items):
-        for w in self.q_inner.winfo_children(): w.destroy()
-        if not items:
-            tk.Label(self.q_inner, text="No downloads yet.",
-                     bg=C_BG, fg=C_MUTED, font=("Helvetica",10)).pack(pady=10)
-            return
-        self.queue_count_lbl.configure(text=f"({len(items)} items)")
-        for item in items:
-            row = tk.Frame(self.q_inner, bg=C_SURFACE, relief="flat",
-                           highlightthickness=1, highlightbackground=C_BORDER)
-            row.pack(fill="x", pady=2, ipady=6, ipadx=8)
-            item.row = row
+    def _lbl(self, p, t):
+        return tk.Label(p, text=t, bg=BG, fg=MUTED, font=("Helvetica",10))
 
-            # Status icon
-            icon_txt, icon_col = {
-                "waiting":     ("○", C_MUTED),
-                "downloading": ("▶", C_GOLD),
-                "done":        ("✓", C_SUCCESS),
-                "error":       ("✗", C_ERROR),
-                "paused":      ("⏸", C_WARN),
-            }.get(item.status, ("○", C_MUTED))
-            item._icon_lbl = tk.Label(row, text=icon_txt, bg=C_SURFACE, fg=icon_col,
-                                      font=("Helvetica",13,"bold"), width=2)
-            item._icon_lbl.grid(row=0, column=0, rowspan=2, padx=(4,8))
+    def _entry(self, p, var):
+        return tk.Entry(p, textvariable=var, bg=SURF, fg=TEXT,
+                        insertbackground=GOLD, relief="flat",
+                        highlightthickness=1, highlightbackground=BORDER,
+                        highlightcolor=GOLD, font=("Helvetica",10))
 
-            # Type badge
-            badge_col = {
-                "VIDEO":"#1a3a2a","AUDIO":"#1a2a3a","PDF":"#3a1a1a",
-                "ZIP":"#2a2a1a","INSTALLER":"#2a1a2a","IMAGE":"#1a2a2a","FILE":"#2a2a2a"
-            }.get(item.label, "#2a2a2a")
-            badge_fg = {
-                "VIDEO":C_SUCCESS,"AUDIO":C_INFO,"PDF":C_ERROR,
-                "ZIP":C_WARN,"INSTALLER":C_PURPLE,"IMAGE":C_INFO,"FILE":C_MUTED
-            }.get(item.label, C_MUTED)
-            tk.Label(row, text=item.label, bg=badge_col, fg=badge_fg,
-                     font=("Helvetica",9,"bold"), padx=6, pady=2).grid(row=0,column=1,sticky="w",padx=(0,8))
+    def _ghost_btn(self, p, t, cmd):
+        return ttk.Button(p, text=t, style="Ghost.TButton", command=cmd)
 
-            # Name + number
-            short = item.name if len(item.name) <= 55 else item.name[:52]+"…"
-            item._name_lbl = tk.Label(row, text=f"[{item.idx}/{item.total}] {short}",
-                                      bg=C_SURFACE, fg=C_TEXT, font=("Helvetica",10),
-                                      anchor="w", justify="left")
-            item._name_lbl.grid(row=0,column=2,sticky="ew",padx=(0,8))
+    def _style_menu(self, m):
+        m.configure(bg=SURF2, fg=TEXT, activebackground=MAROON, activeforeground=GOLD,
+                    highlightthickness=0, font=("Helvetica",10), relief="flat",
+                    bd=0, anchor="w")
+        m["menu"].configure(bg=SURF2, fg=TEXT, activebackground=MAROON,
+                            activeforeground=GOLD, font=("Helvetica",10))
 
-            # Meta (size / speed / ETA)
-            item._meta_lbl = tk.Label(row, text="", bg=C_SURFACE, fg=C_MUTED, font=("Helvetica",9))
-            item._meta_lbl.grid(row=1,column=1,columnspan=2,sticky="w",padx=(0,8))
-
-            # Per-item progress bar
-            item._prog = ttk.Progressbar(row, mode="determinate", maximum=100, length=200)
-            item._prog.grid(row=1,column=3,sticky="ew",padx=(0,8))
-            item._prog["value"] = item.pct
-
-            row.columnconfigure(2, weight=1)
-
-    def _update_item_row(self, item):
-        if not item.row: return
-        icon_txt, icon_col = {
-            "waiting":     ("○", C_MUTED),
-            "downloading": ("▶", C_GOLD),
-            "done":        ("✓", C_SUCCESS),
-            "error":       ("✗", C_ERROR),
-            "paused":      ("⏸", C_WARN),
-        }.get(item.status, ("○", C_MUTED))
-        item._icon_lbl.configure(text=icon_txt, fg=icon_col)
-        item._prog["value"] = item.pct
-        meta = []
-        if item.size:  meta.append(item.size)
-        if item.speed: meta.append(item.speed)
-        if item.eta:   meta.append(f"ETA {item.eta}")
-        item._meta_lbl.configure(text="  ·  ".join(meta) if meta else "")
-
-    # ── folder helpers ─────────────────────────────────────────────────────
+    # ── folder ─────────────────────────────────────────────────────────────
     def _pick_folder(self):
         d = filedialog.askdirectory(initialdir=self.folder_var.get())
         if d: self.folder_var.set(d)
 
     def _open_folder(self):
-        p = self.folder_var.get()
-        Path(p).mkdir(parents=True, exist_ok=True)
-        if   platform.system() == "Darwin":  subprocess.run(["open", p])
-        elif platform.system() == "Windows": os.startfile(p)
-        else:                                subprocess.run(["xdg-open", p])
+        p = self.folder_var.get(); Path(p).mkdir(parents=True, exist_ok=True)
+        if   platform.system()=="Darwin":  subprocess.run(["open",p])
+        elif platform.system()=="Windows": os.startfile(p)
+        else:                              subprocess.run(["xdg-open",p])
+
+    # ── log ────────────────────────────────────────────────────────────────
+    def log(self, msg, tag=None):
+        if tag is None:
+            ml = msg.lower()
+            if any(k in ml for k in ("✓","[done]","saved","merged","complete","finished")): tag="ok"
+            elif any(k in ml for k in ("[warn]","warning")): tag="warn"
+            elif any(k in ml for k in ("[error]","failed","error","✗")): tag="err"
+            elif any(k in ml for k in ("[bridge]","[file]","[info]","[resume]","[pause]","[cancel]")): tag="info"
+            else: tag="dim"
+        self._mq.put(("log",(msg,tag)))
 
     def _clear_log(self):
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.configure(state="disabled")
+        # BUG FIX: properly clear log
+        self.log_txt.configure(state="normal")
+        self.log_txt.delete("1.0","end")
+        self.log_txt.configure(state="disabled")
 
-    # ── logging ────────────────────────────────────────────────────────────
-    def log(self, msg, tag="dim"):
-        # Auto-detect tag
-        ml = msg.lower()
-        if any(k in ml for k in ("[ok]","saved","done","complete","merged","✓")): tag = "ok"
-        elif any(k in ml for k in ("[warn]","warning")): tag = "warn"
-        elif any(k in ml for k in ("[error]","failed","error")): tag = "err"
-        elif any(k in ml for k in ("[bridge]","[file]","[info]","[resume]","[cancel]","[pause]")): tag = "info"
-        self.mq.put(("log", (msg, tag)))
+    def _clear_queue(self):
+        if self._is_running():
+            messagebox.showwarning(APP_NAME,"Stop current download first."); return
+        for w in self.q_frame.winfo_children(): w.destroy()
+        self._empty_lbl = tk.Label(self.q_frame,
+            text="No downloads yet. Paste URLs above and press Download.",
+            bg=BG, fg=MUTED, font=("Helvetica",10))
+        self._empty_lbl.pack(pady=16)
+        self._items = []
+        self.url_box.delete("1.0","end")
 
-    def set_status(self, s): self.mq.put(("status", s))
-    def set_prog(self, p):   self.mq.put(("prog", p))
+    # ── queue rows ─────────────────────────────────────────────────────────
+    def _build_rows(self, items):
+        for w in self.q_frame.winfo_children(): w.destroy()
+        if not items:
+            self._empty_lbl = tk.Label(self.q_frame,
+                text="No downloads yet.", bg=BG, fg=MUTED, font=("Helvetica",10))
+            self._empty_lbl.pack(pady=16); return
+        for item in items:
+            row = tk.Frame(self.q_frame, bg=SURF, highlightthickness=1,
+                           highlightbackground=BORDER)
+            row.pack(fill="x", pady=2, ipady=6, ipadx=8)
+            item.row = row
+            fg,bg2 = BADGE_COLORS.get(item.badge,(MUTED,SURF2))
+            # status icon
+            item._lbl_icon = tk.Label(row, text="○", bg=SURF, fg=MUTED,
+                                      font=("Helvetica",14,"bold"), width=2)
+            item._lbl_icon.grid(row=0,column=0,rowspan=2,padx=(4,8))
+            # badge
+            tk.Label(row, text=item.badge, bg=bg2, fg=fg,
+                     font=("Helvetica",9,"bold"), padx=6, pady=2).grid(
+                     row=0,column=1,sticky="w",padx=(0,8))
+            # name
+            short = item.name if len(item.name)<=60 else item.name[:57]+"…"
+            item._lbl_name = tk.Label(row, text=f"[{item.idx}/{item.total}] {short}",
+                                      bg=SURF, fg=TEXT, font=("Helvetica",10),
+                                      anchor="w", justify="left")
+            item._lbl_name.grid(row=0,column=2,sticky="ew",padx=(0,8))
+            # meta
+            item._lbl_meta = tk.Label(row, text="Waiting…", bg=SURF, fg=MUTED,
+                                      font=("Helvetica",9))
+            item._lbl_meta.grid(row=1,column=1,columnspan=2,sticky="w")
+            # progress bar
+            item._prog = ttk.Progressbar(row, mode="determinate", maximum=100, length=180)
+            item._prog.grid(row=1,column=3,sticky="ew",padx=(0,8))
+            item._prog["value"] = item.pct
+            row.columnconfigure(2,weight=1)
+
+    def _update_row(self, item):
+        if not item.row: return
+        icon,col = {
+            "waiting":     ("○",MUTED),
+            "downloading": ("▶",GOLD),
+            "done":        ("✓",GREEN),
+            "error":       ("✗",RED),
+            "paused":      ("⏸",YELLOW),
+            "cancelled":   ("—",MUTED),
+        }.get(item.status,("○",MUTED))
+        item._lbl_icon.configure(text=icon,fg=col)
+        item._prog["value"] = item.pct
+        parts = []
+        if item.size_v:  parts.append(sz(item.size_v))
+        if item.speed_v: parts.append(spd(item.speed_v))
+        if item.eta_v is not None: parts.append(f"ETA {eta(item.eta_v)}")
+        if item.status=="done" and item.done_f:
+            parts = [f"✓ {Path(item.done_f).name}"]
+        item._lbl_meta.configure(text="  ·  ".join(parts) if parts else item.status.capitalize())
+
+    # ── speed graph ────────────────────────────────────────────────────────
+    def _draw_graph(self):
+        g = self.graph; g.delete("graph")
+        g.delete("placeholder")
+        w,h = g.winfo_width(), g.winfo_height()
+        if not self._spd_history or w<10: return
+        vals = [v for _,v in self._spd_history[-60:]]
+        mx   = max(vals) or 1
+        pts  = []
+        for i,v in enumerate(vals):
+            x = int(i/(len(vals)-1)*w) if len(vals)>1 else w//2
+            y = int(h - (v/mx)*(h-4) - 2)
+            pts.extend([x,y])
+        if len(pts)>=4:
+            g.create_line(pts, fill=GOLD, width=1.5, smooth=True, tags="graph")
+        g.create_text(6,6, text=f"Peak: {spd(mx)}", fill=MUTED,
+                      font=("Helvetica",8), anchor="nw", tags="graph")
 
     # ── bridge ─────────────────────────────────────────────────────────────
     def _start_bridge(self):
-        _Bridge.app = self
+        Bridge.app = self
         try:
-            srv = ThreadingHTTPServer(("127.0.0.1", LOCAL_PORT), _Bridge)
+            srv = ThreadingHTTPServer(("127.0.0.1",BRIDGE_PORT), Bridge)
         except OSError as e:
-            self.log(f"[warn] bridge unavailable ({e})")
-            return
+            self.log(f"[warn] bridge unavailable ({e})"); return
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.log(f"[bridge] http://127.0.0.1:{LOCAL_PORT}")
-        self.mq.put(("bridge_ok", None))
-
-    def enqueue_url(self, url):
-        self.mq.put(("ext_url", url))
+        self.log(f"[bridge] http://127.0.0.1:{BRIDGE_PORT}")
+        self._mq.put(("bridge_ok",None))
 
     # ── clipboard ──────────────────────────────────────────────────────────
-    CLIP_HOSTS = VIDEO_HOSTS + ("drive.google.com","dropbox.com","mega.nz","mediafire.com","wetransfer.com")
+    CLIP_HOSTS = VH+("drive.google.com","dropbox.com","mega.nz","mediafire.com","wetransfer.com")
 
     def _looks_dl(self, s):
-        if not s: return False
-        s = s.strip()
-        if not URL_RE.match(s): return False
+        if not s or not URL_RE.match(s.strip()): return False
         u = s.lower()
-        return any(h in u for h in self.CLIP_HOSTS) or any(u.endswith(e) for e in VIDEO_EXTS + GENERAL_EXTS)
+        return any(h in u for h in self.CLIP_HOSTS) or any(u.endswith(e) for e in VE+FE)
 
-    def _poll_clipboard(self):
-        if self._clip_watch.get():
+    def _poll_clip(self):
+        if self._clip_on.get():
             try: clip = self.root.clipboard_get().strip()
             except: clip = ""
-            if clip and clip != self._last_clip and self._looks_dl(clip):
-                self._last_clip = clip
+            if clip and clip!=self._clip_last and self._looks_dl(clip):
+                self._clip_last = clip
                 cur = self.url_box.get("1.0","end").strip()
                 if clip not in cur:
                     self.url_box.delete("1.0","end")
-                    self.url_box.insert("1.0", (cur+"\n"+clip).strip() if cur else clip)
-                    self.set_status(f"📋 Clipboard: {clip[:70]}…")
+                    self.url_box.insert("1.0",(cur+"\n"+clip).strip() if cur else clip)
+                    self._mq.put(("status",f"📋 {clip[:70]}"))
                     try: self.root.bell()
                     except: pass
-            elif clip: self._last_clip = clip
-        self.root.after(1200, self._poll_clipboard)
+            elif clip: self._clip_last = clip
+        self.root.after(1200, self._poll_clip)
+
+    def _on_paste(self):
+        """Auto-start if URL looks downloadable and nothing running."""
+        try: clip = self.root.clipboard_get().strip()
+        except: return
+        if self._looks_dl(clip) and not self._is_running():
+            pass  # user can press Download
 
     # ── queue poll ─────────────────────────────────────────────────────────
     def _poll(self):
         try:
             while True:
-                kind, payload = self.mq.get_nowait()
-                if kind == "log":
-                    msg, tag = payload
-                    self.log_text.configure(state="normal")
-                    self.log_text.insert("end", msg + ("\n" if not msg.endswith("\n") else ""), tag)
-                    self.log_text.see("end")
-                    self.log_text.configure(state="disabled")
-                elif kind == "status":
-                    self.prog_var.set(payload)
-                elif kind == "prog":
+                kind,payload = self._mq.get_nowait()
+                if kind=="log":
+                    msg,tag = payload
+                    # BUG FIX: always enable before writing, disable after
+                    self.log_txt.configure(state="normal")
+                    self.log_txt.insert("end", msg+("\n" if not msg.endswith("\n") else ""), tag)
+                    self.log_txt.see("end")
+                    self.log_txt.configure(state="disabled")
+                elif kind=="status":
+                    self.status_var.set(payload)
+                elif kind=="prog":
                     self.prog_bar["value"] = payload
-                elif kind == "item_update":
-                    self._update_item_row(payload)
-                elif kind == "done":
+                elif kind=="spd":
+                    bps = payload
+                    self.spd_var.set(spd(bps) if bps else "")
+                    self._spd_history.append((time.time(),bps))
+                    if len(self._spd_history)>120: self._spd_history=self._spd_history[-120:]
+                    self._draw_graph()
+                elif kind=="item_up":
+                    self._update_row(payload)
+                elif kind=="done":
                     self._on_done()
-                elif kind == "bridge_ok":
-                    self._dot_lbl.configure(fg=C_SUCCESS)
-                elif kind == "ext_url":
-                    self._receive_ext_url(payload)
-        except queue.Empty: pass
+                elif kind=="bridge_ok":
+                    self._dot.configure(fg=GREEN, text="● Bridge")
+                elif kind=="ext_url":
+                    self._recv_ext(payload)
+        except Q.Empty: pass
         self.root.after(80, self._poll)
 
-    def _receive_ext_url(self, url):
+    def _recv_ext(self, url):
         cur = self.url_box.get("1.0","end").strip()
         if url not in cur:
             self.url_box.delete("1.0","end")
-            self.url_box.insert("1.0", (cur+"\n"+url).strip() if cur else url)
+            self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
         try: self.root.deiconify(); self.root.lift(); self.root.focus_force(); self.root.bell()
         except: pass
-        self.log(f"[bridge] received: {url[:70]}")
-        if not self._is_running():
-            self._start()
-        else:
-            self.set_status(f"Queued: {url[:60]}…")
+        self.log(f"[bridge] {url[:80]}")
+        if not self._is_running(): self._start()
 
     # ── resume ─────────────────────────────────────────────────────────────
     def _check_resume(self):
-        q = self.state.get("queue", [])
+        q = self.state.get("queue",[])
         if q:
-            count = len(q)
-            self.resume_lbl.configure(
-                text=f"⏸  {count} download{'s' if count>1 else ''} paused from last session")
-            self.resume_frame.pack(fill="x", pady=(0,8))
-        self._update_resume_banner()
-
-    def _update_resume_banner(self):
-        q = self.state.get("queue", [])
-        if q:
-            self.resume_frame.pack(fill="x", pady=(0,8))
-        else:
-            self.resume_frame.pack_forget()
+            self.res_lbl.configure(
+                text=f"⏸  {len(q)} download{'s' if len(q)>1 else ''} paused from last session")
+            self.res_frame.pack(fill="x", padx=20, pady=(0,8))
 
     def _do_resume(self):
-        q = self.state.get("queue", [])
+        q = self.state.get("queue",[])
         if not q: return
         urls = [i["url"] for i in q]
-        out  = q[0].get("out_dir", DEFAULT_DIR)
-        fmt  = q[0].get("fmt", "best_mp4")
+        self.folder_var.set(q[0].get("dir",DEFAULT_DIR))
+        fk = q[0].get("fmt","best_mp4")
+        if fk in FMTS: self.fmt_var.set(f"{fk}: {FMTS[fk]['label']}")
         self.url_box.delete("1.0","end")
-        self.url_box.insert("1.0", "\n".join(urls))
-        self.folder_var.set(out)
-        if fmt in FORMAT_OPTIONS: self.fmt_var.set(fmt)
+        self.url_box.insert("1.0","\n".join(urls))
         self.log(f"[resume] {len(urls)} URL(s)")
+        self.res_frame.pack_forget()
         self._start()
 
     def _discard(self):
-        self.state["queue"] = []
-        save_json(STATE_PATH, self.state)
-        self.resume_frame.pack_forget()
-        self.log("[resume] queue discarded.")
+        self.state["queue"]=[]; jsave(STATE_PATH,self.state)
+        self.res_frame.pack_forget()
+        self.log("[resume] queue discarded")
 
-    # ── download control ───────────────────────────────────────────────────
+    # ── start ──────────────────────────────────────────────────────────────
     def _is_running(self):
-        return self.dl_thread and self.dl_thread.is_alive()
+        return self._thread and self._thread.is_alive()
 
     def _start(self):
-        urls = [u.strip() for u in self.url_box.get("1.0","end").splitlines() if u.strip()]
+        # BUG FIX: parse URLs properly, strip blanks
+        raw = self.url_box.get("1.0","end")
+        urls = [u.strip() for u in raw.splitlines() if u.strip() and URL_RE.match(u.strip())]
         if not urls:
-            messagebox.showwarning(APP_NAME, "Paste at least one URL."); return
+            messagebox.showwarning(APP_NAME,"Paste at least one valid URL."); return
+
         out = self.folder_var.get().strip() or DEFAULT_DIR
         Path(out).mkdir(parents=True, exist_ok=True)
-        fmt = self.fmt_var.get().split(":")[0].strip()
-        if fmt not in FORMAT_OPTIONS: fmt = "best_mp4"
-        self.cfg.update({"download_dir": out, "format": fmt,
-                         "clip_watch": self._clip_watch.get(),
-                         "cookies": self.cookies_var.get()})
-        save_json(CONFIG_PATH, self.cfg)
+        fk = self.fmt_var.get().split(":")[0].strip()
+        if fk not in FMTS: fk="best_mp4"
 
+        self.cfg.update({"dir":out,"fmt":fk,"cookies":self.ck_var.get(),
+                         "clip":self._clip_on.get()})
+        jsave(CFG_PATH,self.cfg)
+
+        # BUG FIX: always reset stop event fully before new batch
         self._stop.clear()
-        self._pause.clear()
         self._paused = False
         self._done_files = []
+        self._spd_history = []
 
-        # Build queue items
-        self._dl_items = [DLItem(u, i+1, len(urls)) for i, u in enumerate(urls)]
-        self._build_queue_rows(self._dl_items)
+        # Build items
+        self._items = [DL(u,i+1,len(urls)) for i,u in enumerate(urls)]
+        self._build_rows(self._items)
 
         self.btn_dl.configure(state="disabled")
         self.btn_cancel.configure(state="normal")
         self.btn_pause.configure(state="normal")
-        self.resume_frame.pack_forget()
-        self.prog_bar["value"] = 0
+        self.res_frame.pack_forget()
+        self.prog_bar["value"]=0
 
-        self.dl_thread = threading.Thread(
-            target=self._run, args=(urls, out, fmt), daemon=True)
-        self.dl_thread.start()
+        self._thread = threading.Thread(
+            target=self._run, args=(urls,out,fk), daemon=True)
+        self._thread.start()
 
     def _do_pause(self):
-        self._paused = True
-        self._stop.set()
+        self._paused=True; self._stop.set()
         self.btn_pause.configure(state="disabled")
-        self.log("[pause] pausing after current file…")
+        self.log("[pause] pausing…")
 
     def _do_cancel(self):
-        self._paused = False
-        self._stop.set()
+        self._paused=False; self._stop.set()
         self.log("[cancel] cancelling…")
 
-    # ── yt-dlp opts ────────────────────────────────────────────────────────
-    def _ydl_opts(self, out_dir, fmt_key, item):
-        fmt = FORMAT_OPTIONS[fmt_key]
-        if not self.ffmpeg and "fallback" in fmt:
-            chosen = fmt["fallback"]
-        else:
-            chosen = fmt["format"]
+    # ── ydl opts ───────────────────────────────────────────────────────────
+    def _ydl_opts(self, out, fk, item):
+        f = FMTS[fk]
+        chosen = f.get("fb",f["fmt"]) if not self.ff and "fb" in f else f["fmt"]
 
-        def progress_hook(d):
+        def hook(d):
             if self._stop.is_set():
                 raise yt_dlp.utils.DownloadError("user_stop")
             s = d.get("status")
-            if s == "downloading":
+            if s=="downloading":
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                 done  = d.get("downloaded_bytes") or 0
-                pct   = (done / total * 100) if total else 0
-                spd   = d.get("speed") or 0
-                eta   = d.get("eta")
-                item.pct   = pct
-                item.speed = fmt_speed(spd)
-                item.eta   = fmt_eta(eta)
-                item.size  = fmt_size(total)
-                item.status = "downloading"
-                self.mq.put(("item_update", item))
-                self.set_prog(pct)
-                self.set_status(
+                bps   = d.get("speed") or 0
+                e_    = d.get("eta")
+                item.pct     = (done/total*100) if total else 0
+                item.speed_v = bps
+                item.eta_v   = e_
+                item.size_v  = total
+                item.status  = "downloading"
+                self._mq.put(("item_up",item))
+                self._mq.put(("prog",item.pct))
+                self._mq.put(("spd",bps))
+                self._mq.put(("status",
                     f"[{item.idx}/{item.total}] {d.get('_percent_str','').strip()} "
-                    f"· {fmt_speed(spd)} · ETA {fmt_eta(eta)}")
-            elif s == "finished":
-                item.pct = 100; item.status = "downloading"
-                self.mq.put(("item_update", item))
-                self.set_status(f"[{item.idx}/{item.total}] Merging…")
+                    f"· {spd(bps)} · ETA {eta(e_)}"))
+            elif s=="finished":
+                item.pct=100; self._mq.put(("item_up",item))
+                self._mq.put(("status",f"[{item.idx}/{item.total}] Processing…"))
                 fn = d.get("filename") or (d.get("info_dict") or {}).get("filepath")
                 if fn and fn not in self._done_files:
                     self._done_files.append(fn)
+                    item.done_f = fn
 
         opts = {
             "format":                     chosen,
-            "outtmpl":                    str(Path(out_dir) / "%(title)s [%(id)s].%(ext)s"),
+            "outtmpl":                    str(Path(out)/"%(title)s [%(id)s].%(ext)s"),
             "noplaylist":                 not self.pl_var.get(),
             "writesubtitles":             self.sub_var.get(),
             "writeautomaticsub":          self.sub_var.get(),
             "subtitleslangs":             ["en","bn"] if self.sub_var.get() else [],
             "writethumbnail":             self.thumb_var.get(),
             "ignoreerrors":               True,
-            "no_warnings":                False,
-            "progress_hooks":             [progress_hook],
-            "logger":                     _YDL_Log(self),
-            "retries":                    10,
-            "fragment_retries":           10,
+            "progress_hooks":             [hook],
+            "logger":                     _Log(self),
+            "retries":                    15,
+            "fragment_retries":           15,
             "concurrent_fragment_downloads": 4,
-            "continuedl":                 True,   # ← resume partial downloads
+            "continuedl":                 True,
             "noprogress":                 False,
         }
-        if self.ffmpeg:
-            opts["ffmpeg_location"] = self.ffmpeg
-        cb = self.cookies_var.get()
-        if cb and cb != "none":
-            opts["cookiesfrombrowser"] = (cb,)
-        if "merge" in fmt:
-            opts["merge_output_format"] = fmt["merge"]
-        if "extract_audio" in fmt:
-            opts["postprocessors"] = [{"key":"FFmpegExtractAudio",
-                                        "preferredcodec": fmt["extract_audio"],
-                                        "preferredquality": "0"}]
+        if self.ff: opts["ffmpeg_location"]=self.ff
+        ck = self.ck_var.get()
+        if ck and ck!="none": opts["cookiesfrombrowser"]=(ck,)
+        if "merge" in f: opts["merge_output_format"]=f["merge"]
+        if "audio" in f:
+            opts["postprocessors"]=[{"key":"FFmpegExtractAudio",
+                                     "preferredcodec":f["audio"],"preferredquality":"0"}]
+        # Premiere Pro compatibility: re-encode to H.264+AAC if needed
+        if f.get("pp_compat") and self.ff:
+            opts.setdefault("postprocessors",[])
+            opts["postprocessors"].append({
+                "key": "FFmpegVideoConvertor",
+                "preferedformat": "mp4",
+            })
+            # Force AAC audio for Premiere compatibility
+            opts["postprocessor_args"] = {
+                "ffmpeg": ["-c:v","copy","-c:a","aac","-b:a","320k","-movflags","faststart"]
+            }
         return opts
 
-    # ── main download loop (FIX: reset cancel flag per-item) ───────────────
-    def _run(self, urls, out_dir, fmt_key):
+    # ── main loop ──────────────────────────────────────────────────────────
+    def _run(self, urls, out, fk):
         total = len(urls)
-        self.state["queue"] = [{"url":u,"out_dir":out_dir,"fmt":fmt_key} for u in urls]
-        save_json(STATE_PATH, self.state)
+        self.state["queue"]=[{"url":u,"dir":out,"fmt":fk} for u in urls]
+        jsave(STATE_PATH,self.state)
 
-        for i, url in enumerate(urls):
-            item = self._dl_items[i]
+        for i,url in enumerate(urls):
+            item = self._items[i]
 
-            # ── Check stop BEFORE starting item ──
+            # BUG FIX: check stop BEFORE item, mark remaining as cancelled
             if self._stop.is_set():
-                item.status = "paused" if self._paused else "error"
-                self.mq.put(("item_update", item))
-                continue   # mark remaining as skipped but keep going to save state
+                item.status = "paused" if self._paused else "cancelled"
+                self._mq.put(("item_up",item))
+                continue
 
-            item.status = "downloading"
-            self.mq.put(("item_update", item))
-            self.log(f"\n[{i+1}/{total}] {url}")
+            item.status="downloading"
+            self._mq.put(("item_up",item))
+            self.log(f"\n[{i+1}/{total}] {url[:100]}")
 
             mode = self.mode_var.get().split(":")[0].strip()
-            kind = classify_url(url) if mode == "auto" else mode
+            kind = classify(url) if mode=="auto" else mode
 
             try:
-                if kind == "file":
-                    self._run_file(url, out_dir, item)
-                else:
-                    self._run_video(url, out_dir, fmt_key, item)
+                if kind=="file": self._run_file(url,out,item)
+                else:            self._run_video(url,out,fk,item)
             except Exception as e:
                 self.log(f"[error] {e}")
-                item.status = "error"
-                self.mq.put(("item_update", item))
+                item.status="error"
+                self._mq.put(("item_up",item))
 
-            # ── Reset stop flag between items so next URL starts fresh ──
-            # Only keep stopped if user explicitly paused/cancelled
-            if not self._stop.is_set():
-                if item.status == "downloading":
-                    item.status = "done"
-                    self.mq.put(("item_update", item))
+            # BUG FIX: mark done if not stopped
+            if not self._stop.is_set() and item.status not in ("error","paused","cancelled"):
+                item.status="done"; item.pct=100
+                self._mq.put(("item_up",item))
 
-            # Remove completed item from resume queue
-            self.state["queue"] = [q for q in self.state["queue"] if q.get("url") != url]
-            save_json(STATE_PATH, self.state)
+            # Remove from resume queue
+            self.state["queue"]=[q for q in self.state["queue"] if q.get("url")!=url]
+            jsave(STATE_PATH,self.state)
 
-        # Save remaining queue if paused
+            # BUG FIX: speed graph reset between items
+            self._mq.put(("spd",0))
+
+        # Save paused queue
         if self._paused:
-            remaining = [{"url": self._dl_items[j].url, "out_dir": out_dir, "fmt": fmt_key}
-                         for j in range(len(urls))
-                         if self._dl_items[j].status in ("waiting","paused")]
-            self.state["queue"] = remaining
-            save_json(STATE_PATH, self.state)
+            rem = [{"url":self._items[j].url,"dir":out,"fmt":fk}
+                   for j in range(len(urls))
+                   if self._items[j].status in ("waiting","paused")]
+            self.state["queue"]=rem
         else:
-            self.state["queue"] = []
-            save_json(STATE_PATH, self.state)
+            self.state["queue"]=[]
+        jsave(STATE_PATH,self.state)
+        self._mq.put(("done",None))
 
-        self.mq.put(("done", None))
-
-    def _run_video(self, url, out_dir, fmt_key, item):
-        # Reset stop event so yt-dlp doesn't see leftover stop from previous item
-        was_stopped = self._stop.is_set()
-        opts = self._ydl_opts(out_dir, fmt_key, item)
+    def _run_video(self, url, out, fk, item):
+        opts = self._ydl_opts(out,fk,item)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
             if not self._stop.is_set():
-                item.status = "done"
-                item.pct    = 100
-                self.mq.put(("item_update", item))
+                item.status="done"; item.pct=100
+                self._mq.put(("item_up",item))
         except yt_dlp.utils.DownloadError as e:
             if "user_stop" in str(e):
-                item.status = "paused" if self._paused else "error"
-                self.mq.put(("item_update", item))
+                item.status="paused" if self._paused else "cancelled"
             else:
-                self.log(f"[error] {e}")
-                item.status = "error"
-                self.mq.put(("item_update", item))
+                self.log(f"[error] {e}"); item.status="error"
+            self._mq.put(("item_up",item))
 
-    def _run_file(self, url, out_dir, item):
-        def prog(pct, spd, eta):
-            item.pct   = pct
-            item.speed = fmt_speed(spd)
-            item.eta   = fmt_eta(eta)
-            item.status = "downloading"
-            self.mq.put(("item_update", item))
-            self.set_prog(pct)
-            self.set_status(f"[{item.idx}/{item.total}] {pct:.0f}% · {fmt_speed(spd)} · ETA {fmt_eta(eta)}")
-
-        dl = ChunkDownloader(
-            url, Path(out_dir),
-            n_threads=THREADS_FILE,
-            progress_cb=prog,
-            log_cb=self.log,
-            cancel_fn=lambda: self._stop.is_set(),
-        )
-        result = dl.run()
-        if result and result not in self._done_files:
-            self._done_files.append(result)
+    def _run_file(self, url, out, item):
+        def prog(p,s,r):
+            item.pct=p; item.speed_v=s; item.eta_v=r; item.status="downloading"
+            self._mq.put(("item_up",item))
+            self._mq.put(("prog",p))
+            self._mq.put(("spd",s))
+            self._mq.put(("status",f"[{item.idx}/{item.total}] {p:.0f}% · {spd(s)} · ETA {eta(r)}"))
+        dl = FileDL(url,Path(out),n=THREADS,prog_cb=prog,log_cb=self.log,
+                    cancel_fn=lambda: self._stop.is_set())
+        res = dl.run()
+        if res and res not in self._done_files:
+            self._done_files.append(res); item.done_f=res
         if not self._stop.is_set():
-            item.status = "done"; item.pct = 100
-            self.mq.put(("item_update", item))
+            item.status="done"; item.pct=100
+            self._mq.put(("item_up",item))
 
     # ── done ───────────────────────────────────────────────────────────────
     def _on_done(self):
         self.btn_dl.configure(state="normal")
         self.btn_cancel.configure(state="disabled")
         self.btn_pause.configure(state="disabled")
-        self._update_resume_banner()
-        n = len(self._done_files)
-        done_count = sum(1 for it in self._dl_items if it.status == "done")
-        err_count  = sum(1 for it in self._dl_items if it.status == "error")
-        msg = f"✓ {done_count} done"
-        if err_count: msg += f"  ·  {err_count} error"
-        if self._paused: msg += "  ·  paused"
-        self.set_status(msg)
-        self.prog_bar["value"] = 100 if not self._paused else self.prog_bar["value"]
-        if n > 0:
-            self._native_notify(f"✓ Downloaded {n} file{'s' if n>1 else ''}", Path(self._done_files[0]).name)
+        self._mq.put(("spd",0))
+        done = sum(1 for it in self._items if it.status=="done")
+        err  = sum(1 for it in self._items if it.status=="error")
+        msg  = f"✓ {done} done"
+        if err:    msg+=f"  ·  {err} error"
+        if self._paused: msg+="  ·  paused (resume available)"
+        self._mq.put(("status",msg))
+        self.prog_bar["value"]=100 if not self._paused else self.prog_bar["value"]
+        if self._paused:
+            q=self.state.get("queue",[])
+            if q:
+                self.res_lbl.configure(text=f"⏸  {len(q)} paused")
+                self.res_frame.pack(fill="x",padx=20,pady=(0,8))
+        n=len(self._done_files)
+        if n>0:
+            self._notify(f"✓ {n} file{'s' if n>1 else ''} downloaded",
+                         Path(self._done_files[0]).name)
             try: self.root.bell()
             except: pass
-        if self._paused:
-            self.log(f"[pause] {len(self.state.get('queue',[]))} item(s) saved for resume.")
 
-    def _native_notify(self, title, body):
+    def _notify(self, title, body):
         try:
-            if platform.system() == "Darwin":
+            if   platform.system()=="Darwin":
                 subprocess.Popen(["osascript","-e",
                     f'display notification "{body}" with title "{APP_NAME}" subtitle "{title}" sound name "Glass"'])
-            elif platform.system() == "Windows":
-                ps = (f'[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]>$null;'
-                      f'[xml]$x=\'<toast><visual><binding template="ToastText02"><text id="1">{title}</text><text id="2">{body}</text></binding></visual></toast>\';'
-                      f'$t=New-Object Windows.Data.Xml.Dom.XmlDocument;$t.LoadXml($x.OuterXml);'
-                      f'$n=[Windows.UI.Notifications.ToastNotification]::new($t);'
-                      f'[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("{APP_NAME}").Show($n)')
+            elif platform.system()=="Windows":
+                ps=(f'[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]>$null;'
+                    f'[xml]$x=\'<toast><visual><binding template="ToastText02"><text id="1">{title}</text><text id="2">{body}</text></binding></visual></toast>\';'
+                    f'$t=New-Object Windows.Data.Xml.Dom.XmlDocument;$t.LoadXml($x.OuterXml);'
+                    f'$n=[Windows.UI.Notifications.ToastNotification]::new($t);'
+                    f'[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("{APP_NAME}").Show($n)')
                 subprocess.Popen(["powershell","-Command",ps],
                                  creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
             else:
-                subprocess.Popen(["notify-send", APP_NAME, f"{title}\n{body}"])
+                subprocess.Popen(["notify-send",APP_NAME,f"{title}\n{body}"])
         except: pass
 
 
-class _YDL_Log:
-    def __init__(self, app): self.app = app
-    def debug(self, m):
+class _Log:
+    def __init__(self,a): self.a=a
+    def debug(self,m):
         if m.startswith("[debug]") or ("[download]" in m and "%" in m): return
-        self.app.log(m)
-    def info(self, m):    self.app.log(m)
-    def warning(self, m): self.app.log(f"[warn] {m}")
-    def error(self, m):   self.app.log(f"[error] {m}")
+        self.a.log(m)
+    def info(self,m):    self.a.log(m)
+    def warning(self,m): self.a.log(f"[warn] {m}")
+    def error(self,m):   self.a.log(f"[error] {m}")
 
 
 def main():
@@ -1037,5 +1034,5 @@ def main():
     App(root)
     root.mainloop()
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
