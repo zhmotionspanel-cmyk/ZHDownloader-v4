@@ -866,6 +866,8 @@ class App:
             "ignoreerrors":               True,
             "progress_hooks":             [hook],
             "logger":                     _Log(self),
+            "no_warnings":                False,
+            "extractor_args":             {"youtube": {"player_client": ["web", "android"]}},
             "retries":                    15,
             "fragment_retries":           15,
             "concurrent_fragment_downloads": 4,
