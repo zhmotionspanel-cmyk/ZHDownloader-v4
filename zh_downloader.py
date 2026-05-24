@@ -774,24 +774,26 @@ class App:
         if not hasattr(self, "_referers"): self._referers = {}
         if referer: self._referers[url] = referer
 
-        # Always add URL to box
-        cur = self.url_box.get("1.0","end").strip()
-        if url not in cur:
-            self.url_box.delete("1.0","end")
-            self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
-
         try: self.root.deiconify(); self.root.lift()
         except: pass
 
         self.log(f"[bridge] {url[:80]}")
 
-        # Start immediately if not already running
-        if not self._is_running():
+        if self._is_running():
+            # Running — append to queue
+            cur = self.url_box.get("1.0","end").strip()
+            if url not in cur:
+                self.url_box.delete("1.0","end")
+                self.url_box.insert("1.0",(cur+"\n"+url).strip() if cur else url)
+                self.log("[bridge] Added to queue")
+        else:
+            # Not running — replace URL box and start immediately
+            self.url_box.delete("1.0","end")
+            self.url_box.insert("1.0", url)
+            self.root.update_idletasks()  # Force UI refresh before start
             try: self.root.bell()
             except: pass
             self._start()
-        else:
-            self.log("[bridge] Added to queue - will start after current download")
 
     # -- resume -------------------------------------------------------------
     def _check_resume(self):
@@ -882,7 +884,17 @@ class App:
         raw  = self.url_box.get("1.0","end")
         urls = [u.strip() for u in raw.splitlines() if u.strip() and URL_RE.match(u.strip())]
         if not urls:
-            messagebox.showwarning(APP_NAME,"Paste at least one valid URL."); return
+            # Try clipboard as fallback
+            try:
+                clip = self.root.clipboard_get().strip()
+                if clip and URL_RE.match(clip):
+                    urls = [clip]
+                    self.url_box.delete("1.0","end")
+                    self.url_box.insert("1.0", clip)
+                else:
+                    messagebox.showwarning(APP_NAME,"Paste at least one valid URL."); return
+            except:
+                messagebox.showwarning(APP_NAME,"Paste at least one valid URL."); return
 
         out = self.folder_var.get().strip() or DEFAULT_DIR
         Path(out).mkdir(parents=True, exist_ok=True)
