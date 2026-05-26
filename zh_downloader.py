@@ -39,7 +39,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.1.0"
+APP_VER     = "5.1.1"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -2134,10 +2134,17 @@ class _Log:
 
 
 def main():
-    # Drag-drop needs TkinterDnD root subclass
+    # Drag-drop needs TkinterDnD root subclass; some bundles miss tkdnd binary lib
+    global HAS_DND
+    root = None
     if HAS_DND:
-        root = TkinterDnD.Tk()
-    else:
+        try:
+            root = TkinterDnD.Tk()
+        except Exception as e:
+            print(f"[warn] tkdnd library load failed ({e}); drag-drop disabled")
+            HAS_DND = False
+            root = None
+    if root is None:
         root = tk.Tk()
     App(root)
     root.mainloop()
