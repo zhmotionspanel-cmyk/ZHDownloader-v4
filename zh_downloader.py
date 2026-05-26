@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.6"
+APP_VER     = "5.2.7"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -224,8 +224,6 @@ FMTS = {
     "mp3":     {"label":"Audio MP3",    "fmt":"ba/b", "audio":"mp3"},
     "wav":     {"label":"Audio WAV",    "fmt":"ba/b", "audio":"wav"},
 }
-
-_HEIGHT_RE = re.compile(r"height<=(\d+)")
 
 # -- Download item ----------------------------------------------------------
 class DL:
@@ -676,9 +674,9 @@ class App:
         opt = tk.Frame(tab, bg=T["BG"]); opt.pack(fill="x", padx=4, pady=(12,8))
         self._lbl(opt, "Format").grid(row=0,column=0,sticky="w",padx=(0,4))
         self.fmt_var = tk.StringVar()
-        fk = self.cfg.get("fmt","best_mp4")
-        if fk in FMTS: self.fmt_var.set(f"{fk}: {FMTS[fk]['label']}")
-        else: self.fmt_var.set("best_mp4: Best MP4")
+        fk = self.cfg.get("fmt","4k")
+        if fk not in FMTS: fk = "4k"
+        self.fmt_var.set(f"{fk}: {FMTS[fk]['label']}")
         fm = tk.OptionMenu(opt, self.fmt_var, *[f"{k}: {v['label']}" for k,v in FMTS.items()])
         self._style_menu(fm); fm.configure(width=22)
         fm.grid(row=0,column=1,sticky="w",padx=(0,12))
@@ -1433,8 +1431,9 @@ class App:
         if not q: return
         urls = [i["url"] for i in q]
         self.folder_var.set(q[0].get("dir",DEFAULT_DIR))
-        fk = q[0].get("fmt","best_mp4")
-        if fk in FMTS: self.fmt_var.set(f"{fk}: {FMTS[fk]['label']}")
+        fk = q[0].get("fmt","4k")
+        if fk not in FMTS: fk = "4k"
+        self.fmt_var.set(f"{fk}: {FMTS[fk]['label']}")
         self.url_box.delete("1.0","end")
         self.url_box.insert("1.0","\n".join(urls))
         self.log(f"[resume] {len(urls)} URL(s)")
