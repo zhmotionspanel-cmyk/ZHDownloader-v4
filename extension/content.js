@@ -468,18 +468,27 @@
     else document.addEventListener('DOMContentLoaded', buildBtn);
   }
 
-  if (isVideoSite) initBtn();
-
-  // YouTube: only on watch pages
-  if (location.hostname.includes('youtube.com')) {
-    var lastPath = '';
-    new MutationObserver(function() {
-      if (location.pathname !== lastPath) {
-        lastPath = location.pathname;
-        if (location.pathname === '/watch' && !S.btn) initBtn();
-      }
-    }).observe(document.documentElement, { childList: true, subtree: false });
+  // Watchdog: re-add button every 2s if missing from DOM
+  // Handles SPA navigation (YouTube/Instagram/TikTok) that wipes injected elements
+  function ensureBtnAlive() {
+    if (!isVideoSite) return;
+    // On YouTube, only on watch pages
+    if (location.hostname.includes('youtube.com') && location.pathname !== '/watch') {
+      // Remove button on non-watch YouTube pages
+      if (S.btn && !document.getElementById('__zhbtn')) S.btn = null;
+      var existing = document.getElementById('__zhbtn');
+      if (existing) existing.remove();
+      S.btn = null;
+      return;
+    }
+    if (!document.getElementById('__zhbtn')) {
+      S.btn = null;
+      initBtn();
+    }
   }
+
+  if (isVideoSite) initBtn();
+  setInterval(ensureBtnAlive, 2000);
 
   // ── Background messages ───────────────────────────────────────────────
   chrome.runtime.onMessage.addListener(function(msg) {
