@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.3.8"
+APP_VER     = "5.3.9"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1551,6 +1551,18 @@ class App:
                 if u.strip() and URL_RE.match(u.strip())
                 and not u.strip().startswith("blob:")
                 and not u.strip().startswith("data:")]
+        # De-dupe preserving order
+        seen = set(); urls = [u for u in urls if not (u in seen or seen.add(u))]
+        # Skip URLs already in history (completed previously)
+        try:
+            done_urls = {r.get("url","") for r in self.history.all() if r.get("status")=="done"}
+            skipped = [u for u in urls if u in done_urls]
+            if skipped:
+                if messagebox.askyesno(APP_NAME,
+                    f"{len(skipped)} URL(s) already downloaded previously.\n"
+                    f"Skip them?"):
+                    urls = [u for u in urls if u not in done_urls]
+        except: pass
         if not urls:
             try:
                 clip = self.root.clipboard_get().strip()
@@ -1949,27 +1961,27 @@ class App:
         except Exception: return ("","","")
 
     def _cleanup_intermediates(self, item):
-        """Delete yt-dlp leftover intermediate files: .fNNN.*, .part, .ytdl, .description"""
+        """Delete all yt-dlp + transcode intermediate files in download folder."""
         try:
             p = Path(item.done_f)
             if not p.exists(): return
             parent = p.parent
-            stem = p.stem
-            # Files matching <stem>.fNNN.<ext>, <stem>.part, <stem>.ytdl
             import re as _re
             for f in parent.iterdir():
                 if not f.is_file(): continue
-                if f == p: continue  # keep final file
+                try:
+                    if f.resolve() == p.resolve(): continue
+                except: pass
                 n = f.name
-                # Match yt-dlp format-id suffix: foo.f137.mp4, foo.f140.m4a etc
-                if _re.search(r"\.f\d+\.(mp4|m4a|webm|mkv|mov)$", n, _re.I):
-                    if f.stem.rsplit(".f", 1)[0] == stem or n.startswith(stem):
-                        try: f.unlink(); self.log(f"[cleanup] removed {f.name}")
-                        except: pass
-                elif n.endswith(".part") or n.endswith(".ytdl") or n.endswith(".description"):
-                    if n.startswith(stem):
-                        try: f.unlink(); self.log(f"[cleanup] removed {f.name}")
-                        except: pass
+                if _re.search(r"\.f\d+\.(mp4|m4a|webm|mkv|mov|ts)$", n, _re.I):
+                    try: f.unlink(); self.log(f"[cleanup] {n}")
+                    except: pass
+                elif _re.search(r"\.(h264_tmp|remux_tmp|tmp)\.mp4$", n, _re.I):
+                    try: f.unlink(); self.log(f"[cleanup] {n}")
+                    except: pass
+                elif n.endswith((".part",".ytdl",".description",".info.json",".live_chat.json")):
+                    try: f.unlink(); self.log(f"[cleanup] {n}")
+                    except: pass
         except Exception as e:
             self.log(f"[warn] cleanup failed: {e}")
 
