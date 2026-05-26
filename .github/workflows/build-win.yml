@@ -77,7 +77,7 @@ jobs:
           $env:Path = "$WIX;$env:Path"
           candle.exe -nologo -arch x64 `
             -dAppName="ZH Downloader" `
-            -dAppVersion="5.3.9" `
+            -dAppVersion="5.4.0" `
             -dAppAuthor="ZH Motions" `
             -dExePath="dist\ZHDownloader.exe" `
             -dIconPath="assets\AppIcon.ico" `
@@ -177,7 +177,7 @@ jobs:
           pkgbuild \
             --root "$PKG_ROOT" \
             --identifier "com.zhmotions.downloader" \
-            --version "5.3.9" \
+            --version "5.4.0" \
             --install-location "/" \
             "$COMP_DIR/component.pkg"
           cat > "$COMP_DIR/dist.xml" << 'DISTEOF'
@@ -189,13 +189,13 @@ jobs:
             <choices-outline><line choice="default"><line choice="com.zhmotions.downloader"/></line></choices-outline>
             <choice id="default"/>
             <choice id="com.zhmotions.downloader" visible="false"><pkg-ref id="com.zhmotions.downloader"/></choice>
-            <pkg-ref id="com.zhmotions.downloader" version="5.3.9" onConclusion="none">component.pkg</pkg-ref>
+            <pkg-ref id="com.zhmotions.downloader" version="5.4.0" onConclusion="none">component.pkg</pkg-ref>
           </installer-gui-script>
           DISTEOF
           productbuild \
             --distribution "$COMP_DIR/dist.xml" \
             --package-path "$COMP_DIR" \
-            --version "5.3.9" \
+            --version "5.4.0" \
             "ZHDownloader-macOS.pkg"
 
       - name: Upload DMG
@@ -214,8 +214,13 @@ jobs:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -223,15 +228,9 @@ jobs:
           path: release-files
           merge-multiple: true
 
-      - name: Package browser extension
+      - name: Package browser extension + student-pack
         run: |
-          cd extension
-          zip -r ../release-files/ZHDownloader-Chrome-Extension.zip . -x "*.DS_Store"
-          cd ..
-          ls -la release-files/
-
-      - name: Package student-pack docs
-        run: |
+          cd extension && zip -r ../release-files/ZHDownloader-Chrome-Extension.zip . -x "*.DS_Store" && cd ..
           zip -r release-files/ZHDownloader-Student-Pack.zip student-pack/ -x "*.DS_Store"
           ls -la release-files/
 
@@ -240,5 +239,6 @@ jobs:
         with:
           files: release-files/*
           generate_release_notes: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
