@@ -1230,8 +1230,30 @@ class App:
             item.status="error"
             self._mq.put(("item_up",item))
 
+    def _extract_slug_from_url(self, url, uuid_pat, generic_skip):
+        """Extract human slugs from URL path. Used for both source URL and referer."""
+        import re as _re2, urllib.parse as _up
+        parsed   = _up.urlparse(url)
+        path_dec = _up.unquote(parsed.path)
+        slugs = []
+        for x in path_dec.split("/"):
+            if not x or len(x) <= 3: continue
+            if uuid_pat.match(x): continue
+            if x.isdigit(): continue   # skip numeric IDs like /clip/717762/
+            if x.lower() in generic_skip: continue
+            if x.endswith(".m3u8") or x.endswith(".mpd") or x.endswith(".ts"):
+                stem = x.rsplit(".",1)[0]
+                stem = _re2.sub(r"_[0-9]+p.*$","",stem)
+                stem = _re2.sub(r"_[0-9]+$","",stem)
+                if len(stem) > 3 and not uuid_pat.match(stem):
+                    slugs.append(stem)
+                continue
+            if "footage-hls" in x or "footage-dash" in x: continue
+            slugs.append(x)
+        return slugs
+
     def _rename_if_uuid(self, item, url):
-        """Rename UUID/generic filenames to readable names from URL."""
+        """Rename UUID/generic filenames to readable names from URL or referer."""
         import re as _re, urllib.parse as _up
         if not item.done_f: return
         p = Path(item.done_f)
@@ -1269,33 +1291,28 @@ class App:
         if not uuid_pat.match(name) and not is_generic:
             return
         try:
-            parsed   = _up.urlparse(url)
-            path_dec = _up.unquote(parsed.path)
-            # For Artgrid URLs like /artgrid/footage-hls/UUID/clip-name_720p.m3u8
-            # extract the clip name part
-            slugs = []
-            for x in path_dec.split("/"):
-                if not x or len(x) <= 3: continue
-                if uuid_pat.match(x): continue
-                if x.endswith(".m3u8") or x.endswith(".mpd") or x.endswith(".ts"): 
-                    # Extract name from filename like "france-lake-morning_720p_123.m3u8"
-                    stem = x.rsplit(".",1)[0]  # remove extension
-                    stem = _re2.sub(r"_[0-9]+p.*$","",stem)  # remove _720p_timestamp
-                    stem = _re2.sub(r"_[0-9]+$","",stem)  # remove trailing numbers
-                    if len(stem) > 3 and not uuid_pat.match(stem):
-                        slugs.append(stem)
-                    continue
-                if "footage-hls" in x or "footage-dash" in x: continue
-                slugs.append(x)
-            qs      = _up.parse_qs(parsed.query)
+            # Try referer URL first (artgrid clip page often has descriptive slug)
+            # e.g. https://artgrid.io/clip/717762/son-father-hugging-kid
+            referer = getattr(self, "_referers", {}).get(url, "")
+            generic_skip = {"clip","footage","video","watch","embed","play",
+                            "stream","files","media","content","download",
+                            "artgrid","artlist","io","com","www"}
+            slug_pool = []
+            if referer:
+                slug_pool += self._extract_slug_from_url(referer, uuid_pat, generic_skip)
+            slug_pool += self._extract_slug_from_url(url, uuid_pat, generic_skip)
+            # Query string title
+            parsed = _up.urlparse(url)
+            qs = _up.parse_qs(parsed.query)
             title_q = qs.get("title", qs.get("name", qs.get("filename", [])))
             if title_q:
                 new_name = title_q[0]
-            elif slugs:
-                new_name = max(slugs, key=lambda s: len(s.replace("-"," ").split()))
+            elif slug_pool:
+                # Pick most descriptive (most words, longest)
+                new_name = max(slug_pool, key=lambda s: (len(s.replace("-"," ").split()), len(s)))
             else:
                 return
-        except:
+        except Exception:
             return
         new_name = _re.sub("[^a-zA-Z0-9 _-]", " ", new_name)
         new_name = _re.sub(" +", " ", new_name).strip()[:60]
