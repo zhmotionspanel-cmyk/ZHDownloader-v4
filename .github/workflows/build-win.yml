@@ -52,7 +52,7 @@ jobs:
           $env:Path = "$WIX;$env:Path"
           candle.exe -nologo -arch x64 `
             -dAppName="ZH Downloader" `
-            -dAppVersion=4.0.0 `
+            -dAppVersion="4.0.0" `
             -dAppAuthor="ZH Motions" `
             -dExePath="dist\ZHDownloader.exe" `
             -dIconPath="assets\AppIcon.ico" `
