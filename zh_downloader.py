@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.2"
+APP_VER     = "5.2.3"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1854,9 +1854,22 @@ class App:
             item.status="error"
             self._mq.put(("item_up",item))
 
+    def _ffprobe_duration(self, path):
+        """Get duration in seconds via ffprobe, None if unavailable."""
+        try:
+            ffprobe = shutil.which("ffprobe")
+            if not ffprobe and self.ff:
+                cand = Path(self.ff).parent / "ffprobe"
+                if cand.exists(): ffprobe = str(cand)
+            if not ffprobe: return None
+            r = subprocess.run([ffprobe, "-v","error","-show_entries","format=duration",
+                                "-of","default=noprint_wrappers=1:nokey=1", str(path)],
+                               capture_output=True, text=True, timeout=10)
+            return float((r.stdout or "0").strip() or 0) or None
+        except Exception: return None
+
     def _force_h264_if_needed(self, item):
-        """ALWAYS re-encode to H.264+AAC MP4 for Premiere Pro compatibility.
-        Skip only if file missing or audio-only format."""
+        """ALWAYS re-encode to H.264+AAC MP4 with live progress in UI."""
         try:
             p = Path(item.done_f)
             if not p.exists():
@@ -1864,9 +1877,17 @@ class App:
                 return
             if p.suffix.lower() not in (".mp4",".mkv",".mov",".webm",".ts",".m4v",".avi"):
                 return
-            self.log(f"[transcode] {p.name} → H.264+AAC MP4 ...")
+            duration = self._ffprobe_duration(p) or 0
+            self.log(f"[transcode] {p.name} → H.264+AAC MP4 ({duration:.0f}s source)...")
+            item.pct = 0
+            item.status = "downloading"
+            self._mq.put(("status", f"[{item.idx}/{item.total}] Transcoding to H.264..."))
+            self._mq.put(("item_up", item))
+
             tmp = p.parent / (p.stem + ".h264_tmp.mp4")
-            cmd = [self.ff, "-y", "-i", str(p),
+            cmd = [self.ff, "-y",
+                   "-progress", "pipe:2", "-nostats",
+                   "-i", str(p),
                    "-map","0:v:0?","-map","0:a:0?",
                    "-c:v","libx264","-profile:v","high","-level","5.1",
                    "-preset","slow","-crf","14","-pix_fmt","yuv420p",
@@ -1875,18 +1896,52 @@ class App:
                    "-movflags","+faststart","-tag:v","avc1",
                    "-max_muxing_queue_size","1024",
                    str(tmp)]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+
+            # Stream ffmpeg progress (writes to stderr with -progress pipe:2)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+            last_pct = -1
+            t0 = time.time()
+            tail = []
+            for line in proc.stderr:
+                tail.append(line)
+                if len(tail) > 40: tail = tail[-40:]
+                if self._stop.is_set():
+                    proc.terminate(); break
+                # ffmpeg -progress output: key=value lines, "out_time_us=12345"
+                if line.startswith("out_time_us="):
+                    try:
+                        us = int(line.split("=",1)[1].strip())
+                        sec = us / 1_000_000.0
+                        if duration > 0:
+                            pct = min(99.5, (sec / duration) * 100)
+                            if int(pct) != last_pct:
+                                last_pct = int(pct)
+                                item.pct = pct
+                                elapsed = time.time() - t0
+                                rate = (sec / elapsed) if elapsed > 0 else 0
+                                remaining = (duration - sec) / rate if rate > 0 else None
+                                item.eta_v = int(remaining) if remaining else None
+                                self._mq.put(("item_up", item))
+                                self._mq.put(("status",
+                                    f"[{item.idx}/{item.total}] Transcoding {pct:.0f}% · ETA {eta(remaining)}"))
+                    except: pass
+                elif line.startswith("progress=end"):
+                    item.pct = 100
+                    self._mq.put(("item_up", item))
+            rc = proc.wait()
+            if rc == 0 and tmp.exists() and tmp.stat().st_size > 0:
                 final = p.with_suffix(".mp4")
                 p.unlink(missing_ok=True)
                 tmp.rename(final)
                 item.done_f = str(final)
                 item.name   = final.name
+                item.pct = 100
                 self._mq.put(("item_up", item))
                 self.log(f"[done] Premiere-ready: {final.name}")
             else:
-                err = (r.stderr or '')[-300:]
-                self.log(f"[warn] re-encode failed: {err}")
+                err = "".join(tail)[-300:]
+                self.log(f"[warn] re-encode failed (rc={rc}): {err}")
                 tmp.unlink(missing_ok=True)
         except Exception as e:
             self.log(f"[warn] force h264 skipped: {e}")
