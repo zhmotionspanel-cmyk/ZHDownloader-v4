@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.0"
+APP_VER     = "5.2.1"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1852,42 +1852,38 @@ class App:
             self._mq.put(("item_up",item))
 
     def _force_h264_if_needed(self, item):
-        """If downloaded file's video codec isn't avc1/h264, re-encode in place."""
+        """ALWAYS re-encode to H.264+AAC MP4 for Premiere Pro compatibility.
+        Skip only if file missing or audio-only format."""
         try:
             p = Path(item.done_f)
-            if not p.exists() or p.suffix.lower() not in (".mp4",".mkv",".mov",".webm"):
+            if not p.exists():
+                self.log(f"[warn] transcode skipped: file not found {p}")
                 return
-            # Probe codec via ffprobe (bundled with ffmpeg usually)
-            ffprobe = shutil.which("ffprobe") or str(Path(self.ff).parent / "ffprobe") if self.ff else None
-            codec = ""
-            if ffprobe and Path(ffprobe).exists():
-                try:
-                    r = subprocess.run([ffprobe, "-v","error","-select_streams","v:0",
-                                        "-show_entries","stream=codec_name",
-                                        "-of","default=nokey=1:noprint_wrappers=1", str(p)],
-                                       capture_output=True, text=True, timeout=15)
-                    codec = (r.stdout or "").strip().lower()
-                except Exception: pass
-            if codec in ("h264","avc1",""):
-                # Already h264 OR couldn't probe (assume OK)
-                if codec: self.log(f"[info] codec already h264 — no re-encode needed")
+            if p.suffix.lower() not in (".mp4",".mkv",".mov",".webm",".ts",".m4v",".avi"):
                 return
-            self.log(f"[info] re-encoding {codec} → h264 for editor compatibility...")
+            self.log(f"[transcode] {p.name} → H.264+AAC MP4 ...")
             tmp = p.parent / (p.stem + ".h264_tmp.mp4")
             cmd = [self.ff, "-y", "-i", str(p),
+                   "-map","0:v:0?","-map","0:a:0?",
                    "-c:v","libx264","-profile:v","high","-level","5.1",
                    "-preset","slow","-crf","14","-pix_fmt","yuv420p",
                    "-x264-params","ref=4:bframes=4",
                    "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
                    "-movflags","+faststart","-tag:v","avc1",
+                   "-max_muxing_queue_size","1024",
                    str(tmp)]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            if r.returncode == 0 and tmp.exists():
+            if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+                final = p.with_suffix(".mp4")
                 p.unlink(missing_ok=True)
-                tmp.rename(p)
-                self.log(f"[done] transcoded to h264")
+                tmp.rename(final)
+                item.done_f = str(final)
+                item.name   = final.name
+                self._mq.put(("item_up", item))
+                self.log(f"[done] Premiere-ready: {final.name}")
             else:
-                self.log(f"[warn] re-encode failed: {(r.stderr or '')[:200]}")
+                err = (r.stderr or '')[-300:]
+                self.log(f"[warn] re-encode failed: {err}")
                 tmp.unlink(missing_ok=True)
         except Exception as e:
             self.log(f"[warn] force h264 skipped: {e}")
@@ -1914,6 +1910,9 @@ class App:
         return slugs
 
     def _rename_if_uuid(self, item, url):
+        """Rename downloaded file to descriptive name extracted from URL or referer.
+        Strategy: ALWAYS attempt rename if a good slug found in referer.
+        Falls back to source URL slug or original name."""
         import re as _re, urllib.parse as _up
         if not item.done_f: return
         p = Path(item.done_f)
@@ -1930,23 +1929,12 @@ class App:
             item.done_f = str(p)
         name = p.stem
         uuid_pat = _re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-", _re.I)
-        import re as _re2
-        generic = {"footage","video","clip","download","file","media",
-                   "stream","playlist","index","master","unknown",
-                   "hls","dash","manifest","output","temp"}
-        looks_random = bool(_re2.search(r"-[a-z0-9]{2,8}$", name.lower())) and len(name) < 30
-        is_generic   = (name.lower() in generic or
-                        name.lower().startswith("footage") or
-                        name.lower().startswith("clip-") or
-                        name.lower().startswith("video-") or
-                        "footage-hls" in name.lower() or
-                        looks_random)
-        if not uuid_pat.match(name) and not is_generic: return
         try:
-            referer = self._referers.get(url, "") or item.referer
+            referer = self._referers.get(url, "") or getattr(item,"referer","")
             generic_skip = {"clip","footage","video","watch","embed","play",
                             "stream","files","media","content","download",
-                            "artgrid","artlist","io","com","www"}
+                            "artgrid","artlist","io","com","www","cms-public",
+                            "footage-hls","footage-dash"}
             slug_pool = []
             if referer:
                 slug_pool += self._extract_slug_from_url(referer, uuid_pat, generic_skip)
@@ -1954,6 +1942,7 @@ class App:
             parsed = _up.urlparse(url)
             qs = _up.parse_qs(parsed.query)
             title_q = qs.get("title", qs.get("name", qs.get("filename", [])))
+            # Priority: query string title > referer slug > URL slug
             if title_q:
                 new_name = title_q[0]
             elif slug_pool:
@@ -1965,6 +1954,8 @@ class App:
         new_name = _re.sub("[^a-zA-Z0-9 _-]", " ", new_name)
         new_name = _re.sub(" +", " ", new_name).strip()[:60]
         if not new_name or len(new_name) < 3: return
+        # Skip rename only if new name == current name (no point)
+        if new_name.lower() == name.lower(): return
         # Apply conflict resolution
         final = self._resolve_conflict(p.parent / f"{new_name}{p.suffix}")
         if final is None: return
