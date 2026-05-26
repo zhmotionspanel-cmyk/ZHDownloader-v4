@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.3.1"
+APP_VER     = "5.3.2"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -2378,7 +2378,7 @@ class App:
                    "• Auto-categorize: organize to Video/Audio folders\n"
                    "• Conflict: rename / overwrite / skip / ask\n\n"),
             ("h1", "Need more help?"),
-            ("",   "Ask in your cohort Discord / WhatsApp group.\n"
+            ("",   "Ask in your ZH Motions community group.\n"
                    "Bug reports: screenshot + send to instructor.\n\n"),
             ("dim", "ZH Motions © 2026 — Internal student use only.\n"
                     f"Version: {APP_VER}"),
@@ -2388,13 +2388,22 @@ class App:
             else:   txt.insert("end", text)
         txt.configure(state="disabled")
 
+        # Promo banner
+        promo = tk.Frame(d, bg=T["SURF"], padx=14, pady=10)
+        promo.pack(fill="x", padx=18, pady=(0,10))
+        tk.Label(promo, text="🎬  Become a pro editor — ZH Motions Courses",
+                 bg=T["SURF"], fg=T["ACCENT"], font=("Helvetica",10,"bold")).pack(side="left")
+        ttk.Button(promo, text="Visit www.zhmotions.com", style="Main.TButton",
+                   command=lambda: self._open_url("https://www.zhmotions.com")
+                   ).pack(side="right")
+
         # Footer
         ftr = tk.Frame(d, bg=T["BG"]); ftr.pack(fill="x", padx=18, pady=(0,14))
         ttk.Button(ftr, text="Open Online Guide", style="Ghost.TButton",
                    command=lambda: self._open_url(
                        "https://github.com/zhmotionspanel-cmyk/ZHDownloader-v4/blob/main/INSTALL-STUDENTS.md"
                    )).pack(side="left", padx=(0,8))
-        ttk.Button(ftr, text="Close", style="Main.TButton",
+        ttk.Button(ftr, text="Close", style="Ghost.TButton",
                    command=d.destroy).pack(side="right")
 
     def _open_url(self, url):
@@ -2461,9 +2470,20 @@ class App:
             tk.Label(legal, text=f"  • {tool} — {lic}", bg=T["BG"], fg=T["MUTED"],
                      font=("Helvetica",8)).pack(anchor="w")
 
+        # ZH Motions promo
+        promo = tk.Frame(d, bg=T["SURF"], padx=18, pady=12)
+        promo.pack(fill="x", padx=24, pady=10)
+        tk.Label(promo, text="🎬  Level up your video editing skills",
+                 bg=T["SURF"], fg=T["ACCENT"], font=("Helvetica",11,"bold")).pack()
+        tk.Label(promo, text="Premiere Pro · After Effects · Color Grading · Freelance",
+                 bg=T["SURF"], fg=T["MUTED"], font=("Helvetica",9)).pack(pady=(2,8))
+        ttk.Button(promo, text="🌐  Visit www.zhmotions.com", style="Main.TButton",
+                   command=lambda: self._open_url("https://www.zhmotions.com")
+                   ).pack()
+
         # Close
-        ttk.Button(d, text="Close", style="Main.TButton",
-                   command=d.destroy).pack(pady=(14,18))
+        ttk.Button(d, text="Close", style="Ghost.TButton",
+                   command=d.destroy).pack(pady=(8,18))
 
     def _on_close(self):
         """Minimize-to-tray if tray available, else quit normally."""
