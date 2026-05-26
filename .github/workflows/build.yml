@@ -1,0 +1,244 @@
+name: Build — Windows EXE + MSI + macOS DMG/PKG
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y --no-progress
+
+      - name: Locate ffmpeg + ffprobe
+        id: ffmpeg
+        shell: pwsh
+        run: |
+          $ff = (Get-Command ffmpeg).Source
+          $fp = (Get-Command ffprobe).Source
+          echo "path=$ff" >> $env:GITHUB_OUTPUT
+          echo "probe=$fp" >> $env:GITHUB_OUTPUT
+          echo "ffmpeg: $ff"
+          echo "ffprobe: $fp"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Locate tkdnd binary
+        id: tkdnd
+        shell: pwsh
+        run: |
+          $p = python -c "import tkinterdnd2, os; print(os.path.join(os.path.dirname(tkinterdnd2.__file__), 'tkdnd'))"
+          echo "path=$p" >> $env:GITHUB_OUTPUT
+          dir $p
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          pyinstaller `
+            --noconfirm --clean --windowed --onefile `
+            --name "ZHDownloader" `
+            --icon "assets\AppIcon.ico" `
+            --add-data "assets;assets" `
+            --add-binary "${{ steps.ffmpeg.outputs.path }};." `
+            --add-binary "${{ steps.ffmpeg.outputs.probe }};." `
+            --add-data "${{ steps.tkdnd.outputs.path }};tkinterdnd2/tkdnd" `
+            --collect-all tkinterdnd2 `
+            --collect-all pystray `
+            --collect-all PIL `
+            --hidden-import pystray._darwin `
+            --hidden-import pystray._win32 `
+            --hidden-import pystray._base `
+            --copy-metadata pystray `
+            zh_downloader.py
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $WIX = (Get-ChildItem 'C:\Program Files (x86)\WiX Toolset*' | Select-Object -First 1).FullName + '\bin'
+          $env:Path = "$WIX;$env:Path"
+          candle.exe -nologo -arch x64 `
+            -dAppName="ZH Downloader" `
+            -dAppVersion="5.4.2" `
+            -dAppAuthor="ZH Motions" `
+            -dExePath="dist\ZHDownloader.exe" `
+            -dIconPath="assets\AppIcon.ico" `
+            -out dist\installer.wixobj `
+            installer.wxs
+          light.exe -nologo `
+            -ext WixUIExtension `
+            -ext WixUtilExtension `
+            -cultures:en-us `
+            -out "dist\ZHDownloader-Setup.msi" `
+            dist\installer.wixobj
+
+      - name: Upload EXE (portable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZHDownloader-Windows-EXE
+          path: dist/ZHDownloader.exe
+
+      - name: Upload MSI (installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZHDownloader-Windows-MSI
+          path: dist/ZHDownloader-Setup.msi
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python with tkinter
+        run: |
+          brew install python-tk@3.12 || true
+          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Install Python deps
+        run: |
+          python3.12 -m pip install -r requirements.txt --break-system-packages
+          python3.12 -m pip install pyinstaller --break-system-packages
+
+      - name: Build .app
+        run: |
+          FFMPEG_BIN="$(command -v ffmpeg)"
+          FFPROBE_BIN="$(command -v ffprobe)"
+          TKDND_PATH="$(python3.12 -c 'import tkinterdnd2, os; print(os.path.join(os.path.dirname(tkinterdnd2.__file__), "tkdnd"))')"
+          echo "ffmpeg: $FFMPEG_BIN"
+          echo "ffprobe: $FFPROBE_BIN"
+          echo "tkdnd path: $TKDND_PATH"
+          ls -la "$TKDND_PATH" || true
+          python3.12 -m PyInstaller \
+            --noconfirm --clean --windowed \
+            --name "ZH Downloader" \
+            --osx-bundle-identifier "com.zhmotions.downloader" \
+            --icon "assets/AppIcon.icns" \
+            --add-data "assets:assets" \
+            --add-binary "$FFMPEG_BIN:." \
+            --add-binary "$FFPROBE_BIN:." \
+            --add-data "$TKDND_PATH:tkinterdnd2/tkdnd" \
+            --collect-all tkinterdnd2 \
+            --collect-all pystray \
+            --collect-all PIL \
+            --hidden-import pystray._darwin \
+            --hidden-import pystray._base \
+            --hidden-import AppKit \
+            --hidden-import Foundation \
+            --hidden-import objc \
+            --copy-metadata pystray \
+            zh_downloader.py
+
+      - name: Build .dmg
+        run: |
+          brew install create-dmg || true
+          create-dmg \
+            --volname "ZH Downloader" \
+            --window-size 540 360 \
+            --icon-size 100 \
+            --icon "ZH Downloader.app" 140 180 \
+            --app-drop-link 400 180 \
+            --no-internet-enable \
+            "ZHDownloader-macOS.dmg" \
+            "dist/ZH Downloader.app" || {
+              STAGE=$(mktemp -d)
+              cp -R "dist/ZH Downloader.app" "$STAGE/"
+              ln -s /Applications "$STAGE/Applications"
+              hdiutil create -volname "ZH Downloader" \
+                -srcfolder "$STAGE" -ov -format UDZO "ZHDownloader-macOS.dmg"
+            }
+
+      - name: Build .pkg
+        run: |
+          PKG_ROOT=$(mktemp -d)
+          mkdir -p "$PKG_ROOT/Applications"
+          cp -R "dist/ZH Downloader.app" "$PKG_ROOT/Applications/"
+          COMP_DIR=$(mktemp -d)
+          pkgbuild \
+            --root "$PKG_ROOT" \
+            --identifier "com.zhmotions.downloader" \
+            --version "5.4.2" \
+            --install-location "/" \
+            "$COMP_DIR/component.pkg"
+          cat > "$COMP_DIR/dist.xml" << 'DISTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <installer-gui-script minSpecVersion="2">
+            <title>ZH Downloader</title>
+            <domains enable_localSystem="true"/>
+            <options customize="never" rootVolumeOnly="true" hostArchitectures="arm64,x86_64"/>
+            <choices-outline><line choice="default"><line choice="com.zhmotions.downloader"/></line></choices-outline>
+            <choice id="default"/>
+            <choice id="com.zhmotions.downloader" visible="false"><pkg-ref id="com.zhmotions.downloader"/></choice>
+            <pkg-ref id="com.zhmotions.downloader" version="5.4.2" onConclusion="none">component.pkg</pkg-ref>
+          </installer-gui-script>
+          DISTEOF
+          productbuild \
+            --distribution "$COMP_DIR/dist.xml" \
+            --package-path "$COMP_DIR" \
+            --version "5.4.2" \
+            "ZHDownloader-macOS.pkg"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZHDownloader-macOS-DMG
+          path: ZHDownloader-macOS.dmg
+
+      - name: Upload PKG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZHDownloader-macOS-PKG
+          path: ZHDownloader-macOS.pkg
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          merge-multiple: true
+
+      - name: Package browser extension + student-pack
+        run: |
+          cd extension && zip -r ../release-files/ZHDownloader-Chrome-Extension.zip . -x "*.DS_Store" && cd ..
+          zip -r release-files/ZHDownloader-Student-Pack.zip student-pack/ -x "*.DS_Store"
+          ls -la release-files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
