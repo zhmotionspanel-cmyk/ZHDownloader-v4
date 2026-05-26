@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.1.4"
+APP_VER     = "5.1.5"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -61,6 +61,21 @@ MAX_CONCURRENT  = 5
 
 # -- Themes -----------------------------------------------------------------
 THEMES = {
+    # Default light — clean modern flat UI
+    "Light": {
+        "BG":"#f5f6f8","SURF":"#ffffff","SURF2":"#eceef2","BORDER":"#d6d9e0",
+        "ACCENT":"#2563eb","ACCENT2":"#1d4ed8","MAROON":"#dbeafe",
+        "TEXT":"#1f2937","MUTED":"#6b7280",
+        "GREEN":"#10b981","YELLOW":"#f59e0b","RED":"#ef4444","BLUE":"#3b82f6","PURPLE":"#8b5cf6",
+        "HEADER":"#ffffff","INPUT":"#ffffff","LOG_BG":"#f8fafc","LOG_FG":"#475569",
+    },
+    "Cream": {
+        "BG":"#faf7f2","SURF":"#ffffff","SURF2":"#f0ebe2","BORDER":"#d4c5b0",
+        "ACCENT":"#d97706","ACCENT2":"#b45309","MAROON":"#fed7aa",
+        "TEXT":"#3d2914","MUTED":"#92715c",
+        "GREEN":"#16a34a","YELLOW":"#ca8a04","RED":"#dc2626","BLUE":"#0284c7","PURPLE":"#9333ea",
+        "HEADER":"#ffffff","INPUT":"#ffffff","LOG_BG":"#fdfbf7","LOG_FG":"#7a5a3a",
+    },
     "Sunset": {
         "BG":"#160800","SURF":"#1e0d02","SURF2":"#271205","BORDER":"#3d1e08",
         "ACCENT":"#ff8c42","ACCENT2":"#ff6b35","MAROON":"#8b2500",
@@ -82,7 +97,7 @@ THEMES = {
         "GREEN":"#86efac","YELLOW":"#fde047","RED":"#fb7185","BLUE":"#5eead4","PURPLE":"#c084fc",
         "HEADER":"#0f1d18","INPUT":"#152822","LOG_BG":"#070d0a","LOG_FG":"#3a5547",
     },
-    "Mono": {
+    "Mono Dark": {
         "BG":"#1a1a1a","SURF":"#252525","SURF2":"#303030","BORDER":"#454545",
         "ACCENT":"#e5e5e5","ACCENT2":"#cccccc","MAROON":"#3a3a3a",
         "TEXT":"#f0f0f0","MUTED":"#888888",
@@ -92,7 +107,7 @@ THEMES = {
 }
 
 # Active theme - mutated at runtime via set_theme()
-T = THEMES["Sunset"].copy()
+T = THEMES["Light"].copy()
 
 # -- File categories --------------------------------------------------------
 CATEGORIES = {
@@ -189,20 +204,18 @@ _H264 = "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[ext=mp4]+best
 _H264_CAP = "bestvideo[vcodec^=avc1][height<={h}]+bestaudio[acodec^=mp4a]/bestvideo[ext=mp4][height<={h}]+bestaudio[ext=m4a]/best[ext=mp4][height<={h}]/best[height<={h}]"
 
 FMTS = {
-    "h264_best": {"label":"Best (Premiere Pro)",  "fmt":_H264,                          "merge":"mp4", "fb":"best[ext=mp4]/best", "pp_compat":True},
-    "h264_2160": {"label":"4K (Premiere Pro)",    "fmt":_H264_CAP.format(h=2160),       "merge":"mp4", "fb":"best[height<=2160]", "pp_compat":True},
-    "h264_1080": {"label":"1080p (Premiere Pro)", "fmt":_H264_CAP.format(h=1080),       "merge":"mp4", "fb":"best[height<=1080]", "pp_compat":True},
-    "h264_720":  {"label":"720p (Premiere Pro)",  "fmt":_H264_CAP.format(h=720),        "merge":"mp4", "fb":"best[height<=720]",  "pp_compat":True},
-    "h264_480":  {"label":"480p (Premiere Pro)",  "fmt":_H264_CAP.format(h=480),        "merge":"mp4", "fb":"best[height<=480]",  "pp_compat":True},
-    "best_mp4":  {"label":"Best MP4",  "fmt":"bestvideo+bestaudio/best", "merge":"mp4", "fb":"best"},
-    "best":      {"label":"Best",      "fmt":"bestvideo+bestaudio/best", "fb":"best"},
-    "2160p":     {"label":"4K",        "fmt":"bestvideo[height<=2160]+bestaudio/best[height<=2160]", "merge":"mp4", "fb":"best[height<=2160]"},
-    "1080p":     {"label":"1080p",     "fmt":"bestvideo[height<=1080]+bestaudio/best[height<=1080]", "merge":"mp4", "fb":"best[height<=1080]"},
-    "720p":      {"label":"720p",      "fmt":"bestvideo[height<=720]+bestaudio/best[height<=720]",   "merge":"mp4", "fb":"best[height<=720]"},
-    "480p":      {"label":"480p",      "fmt":"bestvideo[height<=480]+bestaudio/best[height<=480]",   "merge":"mp4", "fb":"best[height<=480]"},
-    "mp3":       {"label":"Audio MP3",     "fmt":"ba/b", "audio":"mp3"},
-    "wav":       {"label":"Audio WAV",     "fmt":"ba/b", "audio":"wav"},
-    "m4a":       {"label":"Audio M4A",     "fmt":"ba[ext=m4a]/ba/b", "audio":"m4a"},
+    # HD/4K only — Premiere Pro compatible (force avc1 + transcode VP9/AV1)
+    "h264_best": {"label":"Best Quality (Premiere Pro)", "fmt":_H264,                    "merge":"mp4", "fb":"best[ext=mp4]/best",  "pp_compat":True},
+    "h264_2160": {"label":"4K Premiere Pro",             "fmt":_H264_CAP.format(h=2160), "merge":"mp4", "fb":"best[height<=2160]", "pp_compat":True},
+    "h264_1080": {"label":"1080p Premiere Pro",          "fmt":_H264_CAP.format(h=1080), "merge":"mp4", "fb":"best[height<=1080]", "pp_compat":True},
+    # HD/4K — raw (any codec, faster, no transcode)
+    "best_mp4":  {"label":"Best MP4 (raw)",  "fmt":"bestvideo+bestaudio/best",                                       "merge":"mp4", "fb":"best"},
+    "2160p":     {"label":"4K (raw)",        "fmt":"bestvideo[height<=2160]+bestaudio/best[height<=2160]",           "merge":"mp4", "fb":"best[height<=2160]"},
+    "1080p":     {"label":"1080p (raw)",     "fmt":"bestvideo[height<=1080]+bestaudio/best[height<=1080]",           "merge":"mp4", "fb":"best[height<=1080]"},
+    # Audio only
+    "mp3":       {"label":"Audio MP3",       "fmt":"ba/b",                       "audio":"mp3"},
+    "wav":       {"label":"Audio WAV",       "fmt":"ba/b",                       "audio":"wav"},
+    "m4a":       {"label":"Audio M4A",       "fmt":"ba[ext=m4a]/ba/b",           "audio":"m4a"},
 }
 
 _HEIGHT_RE = re.compile(r"height<=(\d+)")
@@ -453,11 +466,11 @@ class App:
         self.root      = root
         self.cfg       = jload(CFG_PATH, {
             "dir":DEFAULT_DIR, "fmt":"best_mp4", "cookies":"none", "clip":True,
-            "theme":"Sunset", "concurrent":2, "rate_kbps":0, "categorize":False,
+            "theme":"Light", "concurrent":2, "rate_kbps":0, "categorize":False,
             "completion_sound":True, "shutdown_after":False, "conflict":"rename",
         })
         # Apply theme
-        self.set_theme(self.cfg.get("theme","Sunset"), refresh=False)
+        self.set_theme(self.cfg.get("theme","Light"), refresh=False)
         self.state     = jload(STATE_PATH,{"queue":[]})
         self.history   = HistoryStore()
         self.stats     = StatsStore()
@@ -497,30 +510,17 @@ class App:
 
     # -- theme --------------------------------------------------------------
     def set_theme(self, name, refresh=True):
-        if name not in THEMES: name = "Sunset"
+        if name not in THEMES: name = "Light"
         T.update(THEMES[name])
         self.cfg["theme"] = name
         jsave(CFG_PATH, self.cfg)
         if refresh: self._apply_theme()
 
     def _apply_theme(self):
-        """Re-style after theme change. Tk requires per-widget restyle."""
-        self.root.configure(bg=T["BG"])
+        """Theme switch requires restart for full restyle. ttk re-config helps minimally."""
         s = ttk.Style()
         self._config_styles(s)
-        self._restyle_tree(self.root)
-
-    def _restyle_tree(self, w):
-        try:
-            cls = w.winfo_class()
-            if cls == "Frame":
-                cur = w.cget("bg")
-                if cur in ("#160800","#0a0e1a","#0c1612","#1a1a1a"): w.configure(bg=T["BG"])
-                elif cur in ("#2a0e00","#0d1428","#0f1d18","#202020"): w.configure(bg=T["HEADER"])
-                elif cur in ("#1e0d02","#111729","#152822","#252525"): w.configure(bg=T["SURF"])
-        except: pass
-        for c in w.winfo_children():
-            self._restyle_tree(c)
+        messagebox.showinfo(APP_NAME, "Theme will fully apply after restart.")
 
     def _config_styles(self, s):
         try: s.theme_use("clam")
@@ -532,18 +532,21 @@ class App:
         s.configure("Title.TLabel", background=T["BG"], foreground=T["ACCENT"], font=("Helvetica",13,"bold"))
         s.configure("TCheckbutton", background=T["BG"], foreground=T["MUTED"], font=("Helvetica",10))
         s.map("TCheckbutton", background=[("active",T["BG"])])
-        s.configure("Main.TButton", background=T["ACCENT"], foreground="#000000",
+        # Auto-pick button text color based on theme luminance
+        btn_fg = "#ffffff" if T["BG"].startswith("#") and sum(int(T["BG"][i:i+2],16) for i in (1,3,5)) < 384 else "#ffffff"
+        # Main button always white text on accent
+        s.configure("Main.TButton", background=T["ACCENT"], foreground="#ffffff",
                     font=("Helvetica",11,"bold"), padding=(18,9), borderwidth=0,
                     relief="flat", anchor="center")
         s.map("Main.TButton",
               background=[("active",T["ACCENT2"]),("pressed",T["ACCENT2"]),("disabled",T["SURF2"])],
-              foreground=[("active","#000000"),("disabled",T["MUTED"])])
+              foreground=[("active","#ffffff"),("disabled",T["MUTED"])])
         s.configure("Ghost.TButton", background=T["SURF2"], foreground=T["TEXT"],
                     font=("Helvetica",10), padding=(10,7), borderwidth=1, relief="flat")
         s.map("Ghost.TButton",
               background=[("active",T["SURF"]),("disabled",T["BG"])],
               foreground=[("active",T["TEXT"]),("disabled",T["MUTED"])])
-        s.configure("Danger.TButton", background=T["RED"], foreground="#000000",
+        s.configure("Danger.TButton", background=T["RED"], foreground="#ffffff",
                     font=("Helvetica",10,"bold"), padding=(10,7), borderwidth=0, relief="flat")
         s.configure("TProgressbar", troughcolor=T["SURF2"], background=T["ACCENT"],
                     borderwidth=0, thickness=6)
@@ -958,7 +961,7 @@ class App:
 
         # Theme
         self._setting_row(body, "Theme",
-            tk.OptionMenu(body, tk.StringVar(value=self.cfg.get("theme","Sunset")),
+            tk.OptionMenu(body, tk.StringVar(value=self.cfg.get("theme","Light")),
                           *THEMES.keys(), command=self._on_theme))
 
         # Concurrent downloads
@@ -1022,7 +1025,6 @@ class App:
 
     def _on_theme(self, name):
         self.set_theme(name, refresh=True)
-        messagebox.showinfo(APP_NAME, "Theme applied. Some elements may need restart.")
 
     # -- res ----------------------------------------------------------------
     def _r(self, n):
