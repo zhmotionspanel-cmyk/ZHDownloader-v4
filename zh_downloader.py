@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.5"
+APP_VER     = "5.2.6"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -506,9 +506,16 @@ class App:
         self._row_widgets = {}   # item.id -> dict of widget refs
 
         root.title(f"{APP_NAME} v{APP_VER}")
-        root.geometry("1050x820")
-        root.minsize(900,680)
+        root.geometry("1100x800")
+        root.minsize(900,640)
         root.configure(bg=T["BG"])
+        # Center on screen
+        root.update_idletasks()
+        try:
+            sw = root.winfo_screenwidth(); sh = root.winfo_screenheight()
+            x = max(0, (sw - 1100) // 2); y = max(0, (sh - 800) // 2)
+            root.geometry(f"1100x800+{x}+{y}")
+        except: pass
 
         self._ui()
         self._poll()
@@ -584,20 +591,22 @@ class App:
         s = ttk.Style()
         self._config_styles(s)
 
-        # Header
-        hdr = tk.Frame(self.root, bg=T["HEADER"], height=72)
+        # Header — slimmer
+        hdr = tk.Frame(self.root, bg=T["HEADER"], height=58)
         hdr.pack(fill="x"); hdr.pack_propagate(False)
-        hi = tk.Frame(hdr, bg=T["HEADER"]); hi.pack(fill="both", expand=True, padx=24, pady=14)
+        # Subtle bottom border
+        tk.Frame(self.root, bg=T["BORDER"], height=1).pack(fill="x")
+        hi = tk.Frame(hdr, bg=T["HEADER"]); hi.pack(fill="both", expand=True, padx=20, pady=10)
         lp = self._r("header-logo.png")
         if lp:
             try:
                 self._logo = tk.PhotoImage(file=lp)
-                tk.Label(hi, image=self._logo, bg=T["HEADER"], bd=0).pack(side="left", padx=(0,14))
+                tk.Label(hi, image=self._logo, bg=T["HEADER"], bd=0).pack(side="left", padx=(0,10))
             except: pass
         tx = tk.Frame(hi, bg=T["HEADER"]); tx.pack(side="left")
         tk.Label(tx, text=APP_NAME, bg=T["HEADER"], fg=T["ACCENT"],
-                 font=("Helvetica",17,"bold")).pack(anchor="w")
-        tk.Label(tx, text=f"v{APP_VER}  ·  {APP_AUTHOR}  ·  Universal Download Manager",
+                 font=("Helvetica",15,"bold")).pack(anchor="w")
+        tk.Label(tx, text=f"v{APP_VER}  ·  {APP_AUTHOR}",
                  bg=T["HEADER"], fg=T["MUTED"], font=("Helvetica",9)).pack(anchor="w")
         # Right side info pills
         right = tk.Frame(hi, bg=T["HEADER"]); right.pack(side="right")
@@ -643,20 +652,22 @@ class App:
         self._build_status_bar()
 
     def _build_status_bar(self):
-        bottom = tk.Frame(self.root, bg=T["SURF"], height=46)
+        # Top border line on status bar
+        tk.Frame(self.root, bg=T["BORDER"], height=1).pack(fill="x", side="bottom")
+        bottom = tk.Frame(self.root, bg=T["SURF"], height=36)
         bottom.pack(fill="x", side="bottom"); bottom.pack_propagate(False)
-        left = tk.Frame(bottom, bg=T["SURF"]); left.pack(side="left", padx=14, pady=8)
-        self.status_var = tk.StringVar(value="Idle - paste URLs and press Download")
+        left = tk.Frame(bottom, bg=T["SURF"]); left.pack(side="left", padx=14, pady=6)
+        self.status_var = tk.StringVar(value="Idle — paste URLs and press Download")
         tk.Label(left, textvariable=self.status_var, bg=T["SURF"], fg=T["MUTED"],
                  font=("Helvetica",9)).pack(side="left")
-        right = tk.Frame(bottom, bg=T["SURF"]); right.pack(side="right", padx=14, pady=8)
+        right = tk.Frame(bottom, bg=T["SURF"]); right.pack(side="right", padx=14, pady=6)
         self.spd_var = tk.StringVar(value="")
         tk.Label(right, textvariable=self.spd_var, bg=T["SURF"], fg=T["ACCENT"],
                  font=("Helvetica",10,"bold")).pack(side="right")
         # Mini graph
-        self.graph = tk.Canvas(right, bg=T["SURF2"], width=140, height=24,
+        self.graph = tk.Canvas(right, bg=T["SURF2"], width=120, height=20,
                                highlightthickness=0)
-        self.graph.pack(side="right", padx=(0,12))
+        self.graph.pack(side="right", padx=(0,10))
 
     # -- Tab: Downloads -----------------------------------------------------
     def _tab_downloads(self):
