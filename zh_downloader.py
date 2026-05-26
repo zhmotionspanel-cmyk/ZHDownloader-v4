@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.7"
+APP_VER     = "5.2.8"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -590,7 +590,7 @@ class App:
         self._config_styles(s)
 
         # Header — slimmer
-        hdr = tk.Frame(self.root, bg=T["HEADER"], height=58)
+        hdr = tk.Frame(self.root, bg=T["HEADER"], height=70)
         hdr.pack(fill="x"); hdr.pack_propagate(False)
         # Subtle bottom border
         tk.Frame(self.root, bg=T["BORDER"], height=1).pack(fill="x")
@@ -978,58 +978,67 @@ class App:
     # -- Tab: Settings ------------------------------------------------------
     def _tab_settings(self):
         tab = ttk.Frame(self.nb); self.nb.add(tab, text="  ⚙  Settings  ")
-        head = tk.Frame(tab, bg=T["BG"]); head.pack(fill="x", padx=4, pady=10)
+        head = tk.Frame(tab, bg=T["BG"]); head.pack(fill="x", padx=14, pady=(14,10))
         tk.Label(head, text="Settings", bg=T["BG"], fg=T["ACCENT"],
-                 font=("Helvetica",13,"bold")).pack(side="left")
+                 font=("Helvetica",15,"bold")).pack(side="left")
+        tk.Label(head, text="(saved automatically)", bg=T["BG"], fg=T["MUTED"],
+                 font=("Helvetica",9)).pack(side="left", padx=(8,0), pady=(4,0))
 
-        body = tk.Frame(tab, bg=T["BG"]); body.pack(fill="both", expand=True, padx=10, pady=4)
+        # Two-column grid layout for clean alignment
+        body = tk.Frame(tab, bg=T["BG"]); body.pack(fill="both", expand=True, padx=14)
+        body.columnconfigure(0, weight=0, minsize=280)
+        body.columnconfigure(1, weight=1)
 
-        # Theme
-        self._setting_row(body, "Theme",
-            tk.OptionMenu(body, tk.StringVar(value=self.cfg.get("theme","Light")),
-                          *THEMES.keys(), command=self._on_theme))
+        # Theme dropdown
+        self._add_setting(body, 0, "Theme",
+            lambda r: tk.OptionMenu(r, tk.StringVar(value=self.cfg.get("theme","Light")),
+                                    *THEMES.keys(), command=self._on_theme))
 
         # Concurrent downloads
-        cur = tk.IntVar(value=self.cfg.get("concurrent",2))
-        sc  = tk.Scale(body, from_=1, to=MAX_CONCURRENT, orient="horizontal",
-                       variable=cur, bg=T["BG"], fg=T["TEXT"], troughcolor=T["SURF2"],
-                       highlightthickness=0, activebackground=T["ACCENT"],
-                       command=lambda v: self._save_setting("concurrent", int(float(v))))
-        self._setting_row(body, "Concurrent downloads (1-5)", sc)
+        self.concur_var = tk.IntVar(value=self.cfg.get("concurrent",2))
+        self._add_setting(body, 1, "Concurrent downloads (1-5)",
+            lambda r: tk.Scale(r, from_=1, to=MAX_CONCURRENT, orient="horizontal",
+                               variable=self.concur_var, length=200,
+                               bg=T["BG"], fg=T["TEXT"], troughcolor=T["SURF2"],
+                               highlightthickness=0, activebackground=T["ACCENT"],
+                               command=lambda v: self._save_setting("concurrent", int(float(v)))))
 
         # Speed limit
-        rk = tk.IntVar(value=self.cfg.get("rate_kbps",0))
-        sl = tk.Scale(body, from_=0, to=50000, resolution=100, orient="horizontal",
-                      variable=rk, bg=T["BG"], fg=T["TEXT"], troughcolor=T["SURF2"],
-                      highlightthickness=0, activebackground=T["ACCENT"],
-                      command=lambda v: self._save_setting("rate_kbps", int(float(v))))
-        self._setting_row(body, "Speed limit (KB/s, 0 = unlimited)", sl)
+        self.rate_var = tk.IntVar(value=self.cfg.get("rate_kbps",0))
+        self._add_setting(body, 2, "Speed limit (KB/s — 0 = unlimited)",
+            lambda r: tk.Scale(r, from_=0, to=50000, resolution=100, orient="horizontal",
+                               variable=self.rate_var, length=300,
+                               bg=T["BG"], fg=T["TEXT"], troughcolor=T["SURF2"],
+                               highlightthickness=0, activebackground=T["ACCENT"],
+                               command=lambda v: self._save_setting("rate_kbps", int(float(v)))))
 
-        # Toggles
+        # Auto-categorize
         self.cat_var = tk.BooleanVar(value=self.cfg.get("categorize", False))
-        self._setting_row(body, "Auto-categorize folders (Video/Audio/...)",
-            ttk.Checkbutton(body, variable=self.cat_var,
+        self._add_setting(body, 3, "Auto-organize into Video / Audio / Documents folders",
+            lambda r: ttk.Checkbutton(r, variable=self.cat_var,
                 command=lambda: self._save_setting("categorize", self.cat_var.get())))
 
+        # Completion sound
         self.snd_var = tk.BooleanVar(value=self.cfg.get("completion_sound", True))
-        self._setting_row(body, "Play sound on completion",
-            ttk.Checkbutton(body, variable=self.snd_var,
+        self._add_setting(body, 4, "Play sound on completion",
+            lambda r: ttk.Checkbutton(r, variable=self.snd_var,
                 command=lambda: self._save_setting("completion_sound", self.snd_var.get())))
 
+        # Shutdown after
         self.shut_var = tk.BooleanVar(value=self.cfg.get("shutdown_after", False))
-        self._setting_row(body, "Shutdown PC after all downloads complete",
-            ttk.Checkbutton(body, variable=self.shut_var,
+        self._add_setting(body, 5, "Shut down computer after all downloads complete",
+            lambda r: ttk.Checkbutton(r, variable=self.shut_var,
                 command=lambda: self._save_setting("shutdown_after", self.shut_var.get())))
 
         # Conflict resolution
         self.conf_var = tk.StringVar(value=self.cfg.get("conflict","rename"))
-        cm = tk.OptionMenu(body, self.conf_var, "rename","overwrite","skip","ask",
-                           command=lambda v: self._save_setting("conflict", v))
-        self._style_menu(cm); cm.configure(width=12)
-        self._setting_row(body, "When file exists", cm)
+        self._add_setting(body, 6, "When file exists",
+            lambda r: tk.OptionMenu(r, self.conf_var, "rename","overwrite","skip","ask",
+                                    command=lambda v: self._save_setting("conflict", v)))
 
         # Footer
-        ftr = tk.Frame(tab, bg=T["BG"]); ftr.pack(fill="x", padx=10, pady=14)
+        ftr = tk.Frame(tab, bg=T["BG"]); ftr.pack(fill="x", padx=14, pady=(18,14))
+        tk.Frame(ftr, bg=T["BORDER"], height=1).pack(fill="x", pady=(0,10))
         tk.Label(ftr, text=f"Config file: {CFG_PATH}", bg=T["BG"], fg=T["MUTED"],
                  font=("Helvetica",9)).pack(anchor="w")
         ttk.Button(ftr, text="Open config folder", style="Ghost.TButton",
@@ -1037,12 +1046,17 @@ class App:
                                                    else "xdg-open", str(CFG_PATH.parent)])
                    ).pack(anchor="w", pady=(6,0))
 
-    def _setting_row(self, parent, label, widget):
-        r = tk.Frame(parent, bg=T["BG"]); r.pack(fill="x", pady=8)
-        tk.Label(r, text=label, bg=T["BG"], fg=T["TEXT"], font=("Helvetica",10),
-                 width=40, anchor="w").pack(side="left")
-        widget.pack(side="left")
-        if isinstance(widget, tk.OptionMenu): self._style_menu(widget)
+    def _add_setting(self, parent, row, label, widget_factory):
+        """Place label in col 0, widget (built via factory) in col 1 of grid row."""
+        tk.Label(parent, text=label, bg=T["BG"], fg=T["TEXT"], font=("Helvetica",10),
+                 anchor="w").grid(row=row, column=0, sticky="w", pady=10, padx=(0,16))
+        cell = tk.Frame(parent, bg=T["BG"])
+        cell.grid(row=row, column=1, sticky="w", pady=10)
+        widget = widget_factory(cell)
+        widget.pack(side="left", anchor="w")
+        if isinstance(widget, tk.OptionMenu):
+            self._style_menu(widget); widget.configure(width=14)
+        return widget
 
     def _save_setting(self, key, val):
         self.cfg[key] = val
