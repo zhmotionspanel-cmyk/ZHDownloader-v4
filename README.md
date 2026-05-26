@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-4.0.0-d4a13a?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-5.0.0-d4a13a?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-5b1a1f?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square" alt="python">
   <img src="https://github.com/zhmotionspanel-cmyk/ZHDownloader-v4/actions/workflows/build-win.yml/badge.svg" alt="build">
@@ -33,14 +33,24 @@
 ## Features
 
 - **1800+ sites** — YouTube, Vimeo, Instagram, TikTok, Twitter/X, Facebook, Twitch, SoundCloud, Bilibili and more
-- **Any file** — PDF, ZIP, EXE, images, documents via direct URL
-- **Multi-thread downloads** — 8 parallel connections for maximum speed
-- **Resume support** — interrupted downloads continue from where they stopped
-- **Queue** — paste multiple URLs, downloads one by one automatically
-- **Browser extension** — one-click send from Chrome/Edge/Brave to the app
-- **Clipboard detection** — copy a link, app auto-detects it
-- **Formats** — Best MP4, 1080p, 720p, 480p, Audio MP3/WAV
-- **Dark UI** — ZH Motions branded dark theme
+- **Concurrent downloads** — configurable 1-5 parallel (v5)
+- **Tabbed UI** — Downloads / History / Stats / Settings
+- **4 themes** — Sunset, Midnight, Forest, Mono
+- **Download history** — persistent across sessions, search + re-download
+- **Lifetime statistics** — total files, data, time, peak speed, per-category charts
+- **Auto-categorize folders** — Video / Audio / Documents / Archives
+- **Speed limiter** — throttle bandwidth (KB/s slider)
+- **Conflict resolution** — rename / overwrite / skip / ask per file
+- **Site grabber** — extract all media links from any page URL
+- **Scheduler** — preset times (30 min / 1h / Tonight 11 PM / Tomorrow)
+- **Shutdown after done** — auto-power-off when queue completes
+- **Completion sound** — system audio on finish
+- **Multi-thread file downloads** — 8 parallel connections per file
+- **Resume support** — interrupted downloads continue
+- **Browser extension** — one-click send from Chrome/Edge/Brave
+- **Clipboard detection** — copy link, auto-add
+- **Premiere Pro compat** — force H.264/avc1 transcode for editor import
+- **Cookie support** — Chrome/Safari/Firefox/Edge/Brave for auth sites
 
 ---
 
@@ -141,8 +151,8 @@ Find files under **Actions → latest run → Artifacts**.
 
 To create a release with all files attached:
 ```bash
-git tag v4.0.0
-git push origin v4.0.0
+git tag v5.0.0
+git push origin v5.0.0
 ```
 
 ---
