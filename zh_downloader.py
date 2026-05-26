@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.4.0"
+APP_VER     = "5.4.2"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1845,11 +1845,34 @@ class App:
             # Pass DIRECTORY so yt-dlp finds both ffmpeg + ffprobe
             opts["ffmpeg_location"] = str(Path(self.ff).parent)
         ck = self.ck_var.get()
+        # YouTube PoToken nerf — without cookies, max 360p. Auto-try chrome
+        # for YouTube even when user picked "none" (silent fallback if it fails).
+        if is_youtube and (not ck or ck == "none"):
+            # Auto-detect installed browser with cookies
+            for browser, path in [
+                ("chrome", Path.home()/"Library/Application Support/Google/Chrome"),
+                ("brave",  Path.home()/"Library/Application Support/BraveSoftware/Brave-Browser"),
+                ("edge",   Path.home()/"Library/Application Support/Microsoft Edge"),
+                ("safari", Path.home()/"Library/Safari"),
+                ("firefox",Path.home()/"Library/Application Support/Firefox"),
+            ]:
+                # Windows paths
+                if platform.system() == "Windows":
+                    wmap = {
+                        "chrome": Path.home()/"AppData/Local/Google/Chrome/User Data",
+                        "brave":  Path.home()/"AppData/Local/BraveSoftware/Brave-Browser/User Data",
+                        "edge":   Path.home()/"AppData/Local/Microsoft/Edge/User Data",
+                        "firefox":Path.home()/"AppData/Roaming/Mozilla/Firefox",
+                    }
+                    path = wmap.get(browser, path)
+                if path.exists():
+                    ck = browser
+                    self.log(f"[info] YouTube HD needs cookies — auto-using {browser} cookies")
+                    break
         if ck and ck != "none":
             opts["cookiesfrombrowser"] = (ck,)
-        # YouTube post-PoToken warning (don't force chrome — may fail if Chrome closed/locked)
         if is_youtube and (not ck or ck == "none"):
-            self.log("[warn] YouTube HD/4K needs browser cookies. Set Cookies dropdown → chrome for 1080p+")
+            self.log("[warn] No browser cookies found. YouTube will be 360p max. Login + try again.")
         # Merge output format (yt-dlp Merger uses -c copy — fast, no quality loss)
         if "merge" in f and not is_hls: opts["merge_output_format"]=f["merge"]
         if is_hls:
