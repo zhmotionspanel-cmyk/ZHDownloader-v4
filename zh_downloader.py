@@ -128,24 +128,33 @@ BADGE_COLORS = {
 }
 
 # -- Format options ---------------------------------------------------------
+# Premiere Pro needs H.264 (avc1) + AAC inside MP4. VP9/AV1 inside MP4 = won't open.
+# Prefer native H.264 source (no re-encode); fall back to anything + force transcode.
+_H264 = "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
+_H264_CAP = "bestvideo[vcodec^=avc1][height<={h}]+bestaudio[acodec^=mp4a]/bestvideo[ext=mp4][height<={h}]+bestaudio[ext=m4a]/best[ext=mp4][height<={h}]/best[height<={h}]"
+
 FMTS = {
-    # Premiere Pro friendly - H.264 + AAC in MP4
-    "h264_best": {"label":"Best H.264 MP4 ? Premiere", "fmt":"bv*[vcodec^=avc][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc]+ba/b[ext=mp4]", "merge":"mp4", "fb":"b[ext=mp4]/best", "pp_compat":True},
-    "h264_1080": {"label":"1080p H.264 MP4 ? Premiere", "fmt":"bv*[vcodec^=avc][height<=1080][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc][height<=1080]+ba/b[height<=1080][ext=mp4]", "merge":"mp4", "fb":"b[height<=1080][ext=mp4]", "pp_compat":True},
-    "h264_720":  {"label":"720p H.264 MP4 ? Premiere",  "fmt":"bv*[vcodec^=avc][height<=720][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc][height<=720]+ba/b[height<=720][ext=mp4]",  "merge":"mp4", "fb":"b[height<=720][ext=mp4]",  "pp_compat":True},
-    "h264_480":  {"label":"480p H.264 MP4 ? Premiere",  "fmt":"bv*[vcodec^=avc][height<=480][ext=mp4]+ba[ext=m4a]/bv*[vcodec^=avc][height<=480]+ba/b[height<=480][ext=mp4]",  "merge":"mp4", "fb":"b[height<=480][ext=mp4]",  "pp_compat":True},
-    # Standard formats
-    "best_mp4":  {"label":"Best MP4",      "fmt":"bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best", "merge":"mp4", "fb":"b[ext=mp4]/best"},
-    "best":      {"label":"Best Quality",  "fmt":"bv*+ba/b", "fb":"b/best"},
-    "2160p":     {"label":"4K MP4",        "fmt":"bv*[height<=2160][ext=mp4]+ba[ext=m4a]/b[height<=2160]", "merge":"mp4", "fb":"b[height<=2160][ext=mp4]/b[height<=2160]"},
-    "1080p":     {"label":"1080p MP4",     "fmt":"bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]", "merge":"mp4", "fb":"b[height<=1080][ext=mp4]/b[height<=1080]"},
-    "720p":      {"label":"720p MP4",      "fmt":"bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]",  "merge":"mp4", "fb":"b[height<=720][ext=mp4]/b[height<=720]"},
-    "480p":      {"label":"480p MP4",      "fmt":"bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]",  "merge":"mp4", "fb":"b[height<=480][ext=mp4]/b[height<=480]"},
+    # Premiere Pro compatible - prefer native avc1, transcode VP9/AV1 if needed
+    "h264_best": {"label":"Best (Premiere Pro)",  "fmt":_H264,                          "merge":"mp4", "fb":"best[ext=mp4]/best", "pp_compat":True},
+    "h264_2160": {"label":"4K (Premiere Pro)",    "fmt":_H264_CAP.format(h=2160),       "merge":"mp4", "fb":"best[height<=2160]", "pp_compat":True},
+    "h264_1080": {"label":"1080p (Premiere Pro)", "fmt":_H264_CAP.format(h=1080),       "merge":"mp4", "fb":"best[height<=1080]", "pp_compat":True},
+    "h264_720":  {"label":"720p (Premiere Pro)",  "fmt":_H264_CAP.format(h=720),        "merge":"mp4", "fb":"best[height<=720]",  "pp_compat":True},
+    "h264_480":  {"label":"480p (Premiere Pro)",  "fmt":_H264_CAP.format(h=480),        "merge":"mp4", "fb":"best[height<=480]",  "pp_compat":True},
+    # Standard - highest quality regardless of codec
+    "best_mp4":  {"label":"Best MP4",  "fmt":"bestvideo+bestaudio/best", "merge":"mp4", "fb":"best"},
+    "best":      {"label":"Best",      "fmt":"bestvideo+bestaudio/best", "fb":"best"},
+    "2160p":     {"label":"4K",        "fmt":"bestvideo[height<=2160]+bestaudio/best[height<=2160]", "merge":"mp4", "fb":"best[height<=2160]"},
+    "1080p":     {"label":"1080p",     "fmt":"bestvideo[height<=1080]+bestaudio/best[height<=1080]", "merge":"mp4", "fb":"best[height<=1080]"},
+    "720p":      {"label":"720p",      "fmt":"bestvideo[height<=720]+bestaudio/best[height<=720]",   "merge":"mp4", "fb":"best[height<=720]"},
+    "480p":      {"label":"480p",      "fmt":"bestvideo[height<=480]+bestaudio/best[height<=480]",   "merge":"mp4", "fb":"best[height<=480]"},
     # Audio
     "mp3":       {"label":"Audio MP3",     "fmt":"ba/b", "audio":"mp3"},
     "wav":       {"label":"Audio WAV",     "fmt":"ba/b", "audio":"wav"},
     "m4a":       {"label":"Audio M4A",     "fmt":"ba[ext=m4a]/ba/b", "audio":"m4a"},
 }
+
+# Height cap regex for HLS quality extraction
+_HEIGHT_RE = re.compile(r"height<=(\d+)")
 
 # -- Download item ----------------------------------------------------------
 class DL:
@@ -882,7 +891,11 @@ class App:
     def _start(self):
         import datetime
         raw  = self.url_box.get("1.0","end")
-        urls = [u.strip() for u in raw.splitlines() if u.strip() and URL_RE.match(u.strip())]
+        urls = [u.strip() for u in raw.splitlines()
+                if u.strip()
+                and URL_RE.match(u.strip())
+                and not u.strip().startswith("blob:")
+                and not u.strip().startswith("data:")]
         if not urls:
             # Try clipboard as fallback
             try:
@@ -964,14 +977,16 @@ class App:
         is_youtube = any(h in url_l for h in ("youtube.com","youtu.be"))
         is_hls     = bool(url and not is_youtube and (
             ".m3u8" in url_l or "hls" in url_l or
-            "artlist.io" in url_l or "akamaized.net" in url_l or
-            "cloudfront.net" in url_l or "cms-public" in url_l
+            "artlist.io" in url_l or "artgrid.io" in url_l or
+            "akamaized.net" in url_l or "cloudfront.net" in url_l or
+            "cms-public" in url_l or "footage-hls" in url_l
         ))
         if is_hls:
-            chosen = "best"
+            # HLS streams typically muxed - bestvideo+bestaudio fails.
+            # Keep height cap from selected format if present.
+            m = _HEIGHT_RE.search(f["fmt"])
+            chosen = f"best[height<={m.group(1)}]/best" if m else "best"
         elif is_youtube:
-            # YouTube: pick format based on quality setting
-            fk_key = fk.split(":")[0].strip() if ":" in fk else fk
             chosen = f["fmt"]
         elif not self.ff and "fb" in f:
             chosen = f.get("fb", f["fmt"])
@@ -1005,12 +1020,23 @@ class App:
                 fn = (d.get("filename") or
                       (d.get("info_dict") or {}).get("filepath") or
                       (d.get("info_dict") or {}).get("_filename") or "")
-                if fn and fn not in self._done_files:
-                    self._done_files.append(fn)
+                if fn:
+                    # Always track latest filename; postprocessor_hook will update again
                     item.done_f = fn
-                    # Update item name display with actual filename
-                    item.name = Path(fn).name[:80] if fn else item.name
+                    item.name = Path(fn).name[:80]
                     self._mq.put(("item_up", item))
+
+        def pp_hook(d):
+            # Fires after postprocessor (merger, video convertor) — file ext/path may change
+            if d.get("status") != "finished": return
+            info = d.get("info_dict") or {}
+            fn = info.get("filepath") or d.get("filename") or ""
+            if fn and Path(fn).exists():
+                item.done_f = fn
+                item.name = Path(fn).name[:80]
+                if fn not in self._done_files:
+                    self._done_files.append(fn)
+                self._mq.put(("item_up", item))
 
         opts = {
             "format":                     chosen,
@@ -1028,14 +1054,12 @@ class App:
             "writethumbnail":             self.thumb_var.get(),
             "ignoreerrors":               True,
             "progress_hooks":             [hook],
+            "postprocessor_hooks":        [pp_hook],
             "logger":                     _Log(self),
             "no_warnings":                False,
             "extractor_args":             {
                 "youtube": {
                     "player_client": ["web", "android", "ios"],
-                },
-                "youtubetab": {
-                    "skip": ["authcheck"],
                 },
             },
             "youtube_include_dash_manifest": True,
@@ -1058,46 +1082,52 @@ class App:
         }
         if self.ff: opts["ffmpeg_location"]=self.ff
         ck = self.ck_var.get()
-        if ck and ck!="none": opts["cookiesfrombrowser"]=(ck,)
+        # Cookies needed for age-gated, member-only, and full 1080p+ YouTube formats
+        if ck and ck != "none":
+            opts["cookiesfrombrowser"] = (ck,)
         if "merge" in f and not is_hls: opts["merge_output_format"]=f["merge"]
         if is_hls:
             opts["merge_output_format"] = "mp4"
+            opts["final_ext"] = "mp4"
             if self.ff:
-                # Re-encode HLS segments to proper H.264+AAC mp4
-                # Compatible with QuickTime, Premiere Pro, VLC, Final Cut
-                opts["postprocessors"] = [
-                    {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+                opts["postprocessors"] = [{"key":"FFmpegVideoConvertor","preferedformat":"mp4"}]
+                _hls_args = [
+                    "-c:v","libx264","-profile:v","high","-level","4.1",
+                    "-preset","fast","-crf","16","-pix_fmt","yuv420p",
+                    "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
+                    "-movflags","+faststart","-tag:v","avc1",
                 ]
                 opts["postprocessor_args"] = {
-                    "ffmpeg": [
-                        "-c:v", "libx264",
-                        "-profile:v", "high",
-                        "-level", "4.1",
-                        "-preset", "fast",
-                        "-crf", "16",
-                        "-pix_fmt", "yuv420p",
-                        "-c:a", "aac",
-                        "-b:a", "320k",
-                        "-ar", "48000",
-                        "-ac", "2",
-                        "-movflags", "+faststart",
-                        "-map_metadata", "0",
-                        "-vtag", "avc1",
-                    ],
+                    "videoconvertor": _hls_args,
+                    "ffmpeg_o1": _hls_args,
+                    "ffmpeg": _hls_args,
                 }
         if "audio" in f:
             opts["postprocessors"]=[{"key":"FFmpegExtractAudio",
                                      "preferredcodec":f["audio"],"preferredquality":"0"}]
-        # Premiere Pro compatibility: re-encode to H.264+AAC if needed
+        # Premiere Pro: ensure final file = H.264 (avc1) + AAC in MP4.
+        # 1) format_sort prefers native avc1 (skips transcode on YouTube when possible)
+        # 2) recodevideo=mp4 forces re-encode of any VP9/AV1 to H.264
+        # 3) postprocessor_args injects codec params into ffmpeg call
         if f.get("pp_compat") and self.ff:
-            opts.setdefault("postprocessors",[])
-            opts["postprocessors"].append({
-                "key": "FFmpegVideoConvertor",
-                "preferedformat": "mp4",
-            })
-            # Force AAC audio for Premiere compatibility
+            opts["merge_output_format"] = "mp4"
+            opts["final_ext"] = "mp4"
+            opts["format_sort"] = ["vcodec:h264", "acodec:aac", "ext:mp4:m4a", "res", "br"]
+            # recode_video forces re-encode (overrides copy mode)
+            opts["postprocessors"] = [
+                {"key":"FFmpegVideoConvertor","preferedformat":"mp4"},
+            ]
+            _pp_args = [
+                "-c:v","libx264","-profile:v","high","-level","4.1",
+                "-preset","medium","-crf","18","-pix_fmt","yuv420p",
+                "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
+                "-movflags","+faststart","-tag:v","avc1",
+            ]
+            # Multiple keys: covers different yt-dlp versions and PP stages
             opts["postprocessor_args"] = {
-                "ffmpeg": ["-c:v","copy","-c:a","aac","-b:a","320k","-movflags","faststart"]
+                "videoconvertor": _pp_args,
+                "ffmpeg_o1": _pp_args,
+                "ffmpeg": _pp_args,
             }
         return opts
 
@@ -1191,33 +1221,60 @@ class App:
         import re as _re, urllib.parse as _up
         if not item.done_f: return
         p = Path(item.done_f)
-        if not p.exists(): return
+        # File may have been remuxed/converted to .mp4 — try sibling with same stem
+        if not p.exists():
+            parent = p.parent
+            stem   = p.stem
+            cand   = None
+            for ext in (".mp4",".mkv",".webm",".m4a",".mp3"):
+                q = parent / f"{stem}{ext}"
+                if q.exists(): cand = q; break
+            # Fallback: glob for any file starting with stem
+            if cand is None and parent.exists():
+                matches = sorted(parent.glob(f"{stem}.*"))
+                if matches: cand = matches[0]
+            if cand is None: return
+            p = cand
+            item.done_f = str(p)
         name = p.stem
         uuid_pat = _re.compile("^[0-9a-f]{8}-[0-9a-f]{4}-", _re.I)
         import re as _re2
         generic = {"footage","video","clip","download","file","media",
                    "stream","playlist","index","master","unknown",
-                   "hls","dash","manifest","output","temp","b2483b78","f538fce4"}
-        # Detect random-looking names like "footage-hsi", "clip-3ax2"
-        looks_random = bool(_re2.search(r"-[a-z0-9]{2,6}$", name.lower())) and len(name) < 25
+                   "hls","dash","manifest","output","temp"}
+        looks_random = bool(_re2.search(r"-[a-z0-9]{2,8}$", name.lower())) and len(name) < 30
         is_generic   = (name.lower() in generic or
-                        name.lower().startswith("footage-") or
+                        name.lower().startswith("footage") or
                         name.lower().startswith("clip-") or
                         name.lower().startswith("video-") or
+                        name.lower().startswith("b2483b") or
+                        name.lower().startswith("f538fc") or
+                        name.lower().startswith("9ba9997") or
+                        "footage-hls" in name.lower() or
                         looks_random)
         if not uuid_pat.match(name) and not is_generic:
             return
         try:
             parsed   = _up.urlparse(url)
             path_dec = _up.unquote(parsed.path)
-            slugs    = [x for x in path_dec.split("/")
-                        if x and len(x) > 3
-                        and not uuid_pat.match(x)
-                        and not x.endswith(".m3u8")
-                        and not x.endswith(".mpd")
-                        and not x.endswith(".ts")]
-            qs       = _up.parse_qs(parsed.query)
-            title_q  = qs.get("title", qs.get("name", qs.get("filename", [])))
+            # For Artgrid URLs like /artgrid/footage-hls/UUID/clip-name_720p.m3u8
+            # extract the clip name part
+            slugs = []
+            for x in path_dec.split("/"):
+                if not x or len(x) <= 3: continue
+                if uuid_pat.match(x): continue
+                if x.endswith(".m3u8") or x.endswith(".mpd") or x.endswith(".ts"): 
+                    # Extract name from filename like "france-lake-morning_720p_123.m3u8"
+                    stem = x.rsplit(".",1)[0]  # remove extension
+                    stem = _re2.sub(r"_[0-9]+p.*$","",stem)  # remove _720p_timestamp
+                    stem = _re2.sub(r"_[0-9]+$","",stem)  # remove trailing numbers
+                    if len(stem) > 3 and not uuid_pat.match(stem):
+                        slugs.append(stem)
+                    continue
+                if "footage-hls" in x or "footage-dash" in x: continue
+                slugs.append(x)
+            qs      = _up.parse_qs(parsed.query)
+            title_q = qs.get("title", qs.get("name", qs.get("filename", [])))
             if title_q:
                 new_name = title_q[0]
             elif slugs:

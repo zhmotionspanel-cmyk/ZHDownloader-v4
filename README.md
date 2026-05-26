@@ -1,145 +1,169 @@
 # ZH Downloader
 
-Personal video grabber for ZH Motions students. Download footage from 1800+ sites
-(YouTube, Vimeo, Instagram, TikTok, X/Twitter, Facebook, Twitch, Pinterest, Reddit + many more).
+<p align="center">
+  <img src="assets/AppIcon-source.png" width="100" alt="ZH Downloader">
+</p>
 
-Two parts:
+<p align="center">
+  <strong>Universal Download Manager by ZH Motions</strong><br>
+  Video · Audio · Any File · 1800+ Sites
+</p>
 
-1. **Browser Extension** — auto-sniffs media on any page.
-2. **Desktop App** — paste any URL, choose quality/format, download with yt-dlp.
-
-ZH Motions dark theme: maroon `#5b1a1f` + gold `#d4a13a` + black `#0a0a0a`.
-
----
-
-## Quick Start (Any Platform)
-
-> **No Python knowledge needed.** Just double-click the launcher for your OS.
-
-| Platform | File to double-click | What it does |
-|----------|----------------------|--------------|
-| **Windows** | `ZH-Downloader-Win.bat` | Checks Python, installs deps, launches app |
-| **macOS** | `ZH-Downloader-Mac.command` | Checks Python, installs deps, launches app |
-| **Linux** | `ZH-Downloader-Linux.sh` | Checks Python, installs deps, launches app |
-
-**First run:** Takes 1-2 minutes (installs packages). **Later runs:** Instant.
-
-### Windows — Step by step
-1. Double-click `ZH-Downloader-Win.bat`
-2. If Python is missing → the script tells you exactly what to do + opens the download page
-3. First time: waits 1-2 min to install packages (shows progress)
-4. App opens — done!
-
-### macOS — Step by step
-1. Double-click `ZH-Downloader-Mac.command`
-2. macOS may ask: *"Are you sure you want to open this?"* → Click **Open**
-3. First time: waits 1-2 min to install packages
-4. App opens — done!
-
-   > If blocked: right-click the file → Open → Open
-
-### Linux — Step by step
-1. Open Terminal in the folder
-2. Run: `bash ZH-Downloader-Linux.sh`
-3. If tkinter is missing, the script tells you the exact `apt`/`dnf`/`pacman` command
-4. App opens — done!
+<p align="center">
+  <img src="https://img.shields.io/badge/version-4.0.0-d4a13a?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-5b1a1f?style=flat-square" alt="platform">
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square" alt="python">
+  <img src="https://github.com/zhmotionspanel-cmyk/ZhMotions-Downloader/actions/workflows/build-win.yml/badge.svg" alt="build">
+</p>
 
 ---
 
-## Want a standalone .exe / .app? (No Python at all)
+## Download
 
-Use the build scripts to create a single file that anyone can run without Python:
+| Platform | File | Notes |
+|----------|------|-------|
+| **Windows** | [ZHDownloader.exe](https://github.com/zhmotionspanel-cmyk/ZhMotions-Downloader/releases/latest) | Double-click to run |
+| **macOS** | [ZHDownloader.pkg](https://github.com/zhmotionspanel-cmyk/ZhMotions-Downloader/releases/latest) | Double-click → Continue → Install |
+| **macOS** | [ZHDownloader.dmg](https://github.com/zhmotionspanel-cmyk/ZhMotions-Downloader/releases/latest) | Drag to Applications |
 
-### Windows → `.exe`
-```cmd
-build_win.bat
-```
-Output: `dist\ZHDownloader.exe` — share this file, no install needed.
+> **No Python required.** Just download and run.
 
-### macOS → `.dmg` + `.pkg`
+---
+
+## Features
+
+- **1800+ sites** — YouTube, Vimeo, Instagram, TikTok, Twitter/X, Facebook, Twitch, SoundCloud, Bilibili and more
+- **Any file** — PDF, ZIP, EXE, images, documents via direct URL
+- **Multi-thread downloads** — 8 parallel connections for maximum speed
+- **Resume support** — interrupted downloads continue from where they stopped
+- **Queue** — paste multiple URLs, downloads one by one automatically
+- **Browser extension** — one-click send from Chrome/Edge/Brave to the app
+- **Clipboard detection** — copy a link, app auto-detects it
+- **Formats** — Best MP4, 1080p, 720p, 480p, Audio MP3/WAV
+- **Dark UI** — ZH Motions branded dark theme
+
+---
+
+## Installation
+
+### Windows
+1. Download `ZHDownloader.exe`
+2. Double-click to run
+3. Windows may show a security warning — click **More info → Run anyway**
+
+### macOS
+1. Download `ZHDownloader.pkg`
+2. Double-click → **Continue → Install → Enter password → Done**
+3. First launch: right-click the app → **Open → Open** (one-time Gatekeeper bypass)
+
+### Linux
 ```bash
-chmod +x build_mac.sh && ./build_mac.sh
+git clone https://github.com/zhmotionspanel-cmyk/ZhMotions-Downloader.git
+cd ZhMotions-Downloader
+bash ZH-Downloader-Linux.sh
 ```
-Output: `ZHDownloader-macOS.dmg` + `ZHDownloader-macOS.pkg`
-
-### Auto-build via GitHub Actions
-Push to `main` branch → GitHub automatically builds `.exe` + `.msi` for Windows.
-Find the files under **Actions → latest run → Artifacts**.
 
 ---
 
-## Browser Extension (Chrome / Edge / Brave)
+## Browser Extension
+
+Works with Chrome, Edge, and Brave.
 
 ### Install
-1. Open `chrome://extensions/`
-2. Toggle **Developer mode** (top right)
+1. Go to `chrome://extensions/`
+2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
 4. Select the `extension/` folder
-5. Pin the gold ZH icon to toolbar
+5. Pin the ZH icon to your toolbar
 
 ### Use
-- Visit any video page → start the player
-- Gold badge shows count of sniffed media
-- Click icon → see list with type chips (MP4 / WEBM / HLS / DASH / AUDIO)
-- Direct files (MP4, WEBM, MP3): click ⬇ to download via browser
-- Streams (HLS / DASH): click ⬇ → URL is copied → paste into desktop app
-
----
-
-## App Features
-
-- Paste one or multiple URLs (one per line)
-- Formats: Best MP4 / Best Any / 1080p / 720p / Audio MP3 / Audio WAV
-- Optional: subtitles, thumbnail, full playlist download
-- Auto-detect URLs from clipboard
-- Browser extension one-click integration
-- Pause & resume downloads
-- Saves to `~/Downloads/ZHDownloader/` by default
+- Visit any page with video or files
+- Gold badge shows count of detected items
+- Click icon → see list → **Save** (direct download) or **App** (send to desktop app)
+- **Page** button sends the current page URL to the app for yt-dlp processing
 
 ---
 
 ## ffmpeg
 
-ffmpeg is needed for:
-- Merging HD video + audio (1080p, 4K)
-- Audio extraction (MP3, WAV)
-- HLS/DASH stream downloads
+ffmpeg is needed for merging HD video + audio (1080p, 4K) and audio extraction.
 
-**Install:**
-- Windows: `choco install ffmpeg` or [download here](https://www.gyan.dev/ffmpeg/builds/)
-- macOS: `brew install ffmpeg`
-- Linux: `sudo apt install ffmpeg`
+| Platform | Install command |
+|----------|----------------|
+| macOS | `brew install ffmpeg` |
+| Windows | `choco install ffmpeg` |
+| Ubuntu | `sudo apt install ffmpeg` |
 
-The launcher scripts will warn you if ffmpeg is missing.
+The pre-built `.exe` and `.pkg` already include ffmpeg — no separate install needed.
 
 ---
 
-## File Map
+## Run from source
 
+```bash
+# Clone
+git clone https://github.com/zhmotionspanel-cmyk/ZhMotions-Downloader.git
+cd ZhMotions-Downloader
+
+# Windows
+ZH-Downloader-Win.bat
+
+# macOS
+open ZH-Downloader-Mac.command
+
+# Linux
+bash ZH-Downloader-Linux.sh
 ```
-ZHDownloader/
-├─ ZH-Downloader-Win.bat        # Windows launcher (double-click)
-├─ ZH-Downloader-Mac.command    # macOS launcher (double-click)
-├─ ZH-Downloader-Linux.sh       # Linux launcher
-├─ zh_downloader.py             # Desktop app (Tkinter GUI)
-├─ requirements.txt             # yt-dlp
-├─ build_mac.sh                 # PyInstaller → .app → .dmg + .pkg
-├─ build_win.bat                # PyInstaller → .exe + .msi
-├─ extension/                   # Chrome/Edge/Brave extension
-│  ├─ manifest.json
-│  ├─ background.js
-│  ├─ content.js
-│  └─ popup.html / popup.css / popup.js
-└─ assets/
-   ├─ AppIcon.ico / AppIcon.icns
-   └─ header-logo.png
+
+The launcher scripts automatically:
+- Check Python is installed
+- Create a virtual environment
+- Install dependencies
+- Launch the app
+
+---
+
+## Build from source
+
+### Windows → .exe
+```cmd
+build_win.bat
 ```
+
+### macOS → .dmg + .pkg
+```bash
+chmod +x build_mac.sh && ./build_mac.sh
+```
+
+### GitHub Actions (auto-build)
+Push to `main` branch → GitHub automatically builds `.exe` and `.pkg`.
+Find files under **Actions → latest run → Artifacts**.
+
+To create a release with all files attached:
+```bash
+git tag v4.0.0
+git push origin v4.0.0
+```
+
+---
+
+## Supported Sites
+
+YouTube · Vimeo · Instagram · TikTok · Twitter/X · Facebook · Twitch · SoundCloud · Reddit · Dailymotion · Pinterest · Bilibili · Rumble · Streamable · Patreon · Artgrid · Artlist · and **1800+ more** via [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 ---
 
 ## Notes
 
-- **Personal use only.** Internal tool for ZH Motions students to grab reference footage.
-- Respect copyright. Don't redistribute downloaded material commercially without rights.
-- HLS / DASH streams need the desktop app (ffmpeg merges segments).
-- Keep yt-dlp updated: `.venv\Scripts\pip install --upgrade yt-dlp` (Win) or `source .venv/bin/activate && pip install --upgrade yt-dlp` (Mac/Linux)
+- Personal use only. Internal tool for ZH Motions students.
+- Respect copyright. Do not redistribute downloaded material commercially without rights.
+- Keep yt-dlp updated for best compatibility:
+  ```
+  pip install --upgrade yt-dlp
+  ```
+
+---
+
+<p align="center">
+  Made with ♥ by <a href="https://zhmotions.com">ZH Motions</a>
+</p>

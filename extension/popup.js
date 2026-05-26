@@ -1,65 +1,103 @@
-// ZH Downloader v2 — popup script
+// ZH Downloader v3 — popup script
 
-let allItems = [];
-let currentTabId = null;
+let allItems = [], currentTabId = null, currentTabUrl = "";
 
-const listEl      = document.getElementById("item-list");
-const emptyEl     = document.getElementById("empty");
-const countEl     = document.getElementById("count");
-const searchEl    = document.getElementById("search");
-const filterEl    = document.getElementById("filter-type");
-const appStatusEl = document.getElementById("app-status");
-const appPingEl   = document.getElementById("app-ping");
+const listEl    = document.getElementById("item-list");
+const emptyEl   = document.getElementById("empty");
+const countEl   = document.getElementById("count");
+const searchEl  = document.getElementById("search");
+const filterEl  = document.getElementById("filter-type");
+const statusEl  = document.getElementById("app-status");
+const pingEl    = document.getElementById("app-ping");
+const siteBar   = document.getElementById("site-bar");
+const siteStatus= document.getElementById("site-status");
+const siteBtn   = document.getElementById("site-toggle-btn");
+const interceptEl = document.getElementById("intercept-toggle");
 
-// ── Init ──────────────────────────────────────────────────────────────────
-
+// ── Init ───────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   loadItems();
   pingApp();
-  setInterval(pingApp, 5000);
+  setInterval(pingApp, 4000);
 
-  searchEl.addEventListener("input", renderList);
-  filterEl.addEventListener("change", renderList);
+  searchEl.addEventListener("input", render);
+  filterEl.addEventListener("change", render);
+
+  // Intercept toggle
+  interceptEl.addEventListener("change", () => {
+    chrome.runtime.sendMessage(
+      { type:"ZH_TOGGLE_INTERCEPT", value: interceptEl.checked },
+      () => showStatus(interceptEl.checked ? "✓ Download interception ON" : "Download interception OFF",
+                       interceptEl.checked)
+    );
+  });
+
+  // Site toggle
+  siteBtn.addEventListener("click", () => {
+    chrome.contextMenus && chrome.tabs.query({ active:true, currentWindow:true }, tabs => {
+      if (!tabs[0]) return;
+      chrome.runtime.sendMessage({ type:"ZH_GET_TAB" }, res => {
+        if (!res) return;
+        loadItems();
+      });
+    });
+    // Trigger context menu toggle via background
+    chrome.runtime.sendMessage({ type:"ZH_SITE_TOGGLE" });
+    setTimeout(loadItems, 300);
+  });
 
   document.getElementById("btn-clear").addEventListener("click", () => {
     if (!currentTabId) return;
-    chrome.runtime.sendMessage({ type: "ZH_CLEAR", tabId: currentTabId });
-    allItems = [];
-    renderList();
+    chrome.runtime.sendMessage({ type:"ZH_CLEAR", tabId:currentTabId });
+    allItems = []; render();
   });
 
-  document.getElementById("btn-page-url").addEventListener("click", () => {
-    chrome.runtime.sendMessage({ type: "ZH_PAGE_URL" }, res => {
-      showStatus(res?.ok ? "✓ Sent page URL to ZH Downloader app!" : "✗ App not running — open ZH Downloader first", res?.ok);
+  document.getElementById("btn-page").addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type:"ZH_PAGE_URL" }, res => {
+      showStatus(res?.ok ? "✓ Sent page to app!" : "✗ App not running", res?.ok);
     });
   });
 });
 
-// ── Load items from background ────────────────────────────────────────────
-
+// ── Load tab info ──────────────────────────────────────────────────────────
 function loadItems() {
-  chrome.runtime.sendMessage({ type: "ZH_GET_TAB" }, res => {
+  chrome.runtime.sendMessage({ type:"ZH_GET_TAB" }, res => {
     if (!res) return;
-    currentTabId = res.tabId;
-    allItems     = res.items || [];
-    renderList();
+    currentTabId  = res.tabId;
+    currentTabUrl = res.url || "";
+    allItems      = res.items || [];
+    interceptEl.checked = res.intercept !== false;
+
+    // Site bar
+    try {
+      const host = new URL(currentTabUrl).hostname;
+      if (res.isDisabled) {
+        siteBar.style.display = "flex";
+        siteStatus.textContent = `Disabled on ${host}`;
+        siteBtn.textContent    = "Enable";
+      } else {
+        siteBar.style.display = "flex";
+        siteStatus.textContent = `Active on ${host}`;
+        siteBtn.textContent    = "Disable";
+      }
+    } catch { siteBar.style.display = "none"; }
+
+    render();
   });
 }
 
-// Listen for live updates
+// Live updates
 chrome.runtime.onMessage.addListener(msg => {
   if (msg.type === "ZH_UPDATED" && msg.tabId === currentTabId) {
     allItems = msg.items || [];
-    renderList();
+    render();
   }
 });
 
-// ── Render ────────────────────────────────────────────────────────────────
-
-function renderList() {
+// ── Render list ────────────────────────────────────────────────────────────
+function render() {
   const q    = searchEl.value.trim().toLowerCase();
   const type = filterEl.value;
-
   const filtered = allItems.filter(item => {
     if (type !== "all" && item.type !== type) return false;
     if (q && !item.name.toLowerCase().includes(q) && !item.url.toLowerCase().includes(q)) return false;
@@ -67,115 +105,102 @@ function renderList() {
   });
 
   listEl.innerHTML = "";
-  emptyEl.style.display = filtered.length === 0 ? "block" : "none";
-  countEl.textContent   = `${filtered.length} item${filtered.length !== 1 ? "s" : ""}`;
+  emptyEl.style.display  = filtered.length === 0 ? "block" : "none";
+  countEl.textContent    = `${filtered.length} item${filtered.length !== 1 ? "s" : ""}`;
 
   filtered.forEach(item => {
-    const li  = document.createElement("li");
+    const li = document.createElement("li");
     li.className = "item";
 
-    const isStream = item.type === "HLS" || item.type === "DASH" || item.type === "STREAM";
+    const isStream = ["HLS","DASH","STREAM"].includes(item.type);
     const isVideo  = ["MP4","WEBM","MKV","VIDEO","HLS","DASH","STREAM"].includes(item.type);
 
-    // Badge
     const badge = document.createElement("span");
-    badge.className  = `type-badge badge-${item.type}`;
+    badge.className   = `type-badge badge-${item.type}`;
     badge.textContent = item.type;
 
-    // Info
-    const info     = document.createElement("div");
+    const info = document.createElement("div");
     info.className = "item-info";
-    const name     = document.createElement("span");
-    name.className = "item-name";
-    name.title     = item.url;
+    const name = document.createElement("span");
+    name.className   = "item-name";
+    name.title       = item.url;
     name.textContent = item.name || shortUrl(item.url);
-    const meta     = document.createElement("span");
-    meta.className = "item-meta";
+    const meta = document.createElement("span");
+    meta.className   = "item-meta";
     meta.textContent = [item.sizeStr, item.source === "dom" ? "DOM" : "Network"].filter(Boolean).join(" · ");
+    info.append(name, meta);
 
-    info.appendChild(name);
-    info.appendChild(meta);
-
-    // Actions
     const actions = document.createElement("div");
     actions.className = "item-actions";
 
+    // Send to app (streams + video)
     if (isStream || isVideo) {
-      // Send to desktop app
-      const btnApp = document.createElement("button");
-      btnApp.className   = "btn-app";
-      btnApp.textContent = "📤 App";
-      btnApp.title       = "Send to ZH Downloader desktop app";
-      btnApp.onclick     = () => {
-        chrome.runtime.sendMessage({ type: "ZH_SEND_TO_APP", url: item.url }, res => {
-          showStatus(res?.ok ? `✓ Sent to app!` : "✗ App not running", res?.ok);
+      const app = document.createElement("button");
+      app.className   = "btn-app";
+      app.textContent = "📤 App";
+      app.onclick = () => {
+        chrome.runtime.sendMessage({ type:"ZH_SEND_TO_APP", url:item.url, referer:item.referer||item.url }, res => {
+          showStatus(res?.ok ? "✓ Sent to app!" : "✗ App not running", res?.ok);
         });
       };
-      actions.appendChild(btnApp);
+      actions.appendChild(app);
     }
 
+    // Direct download (non-stream)
     if (!isStream) {
-      // Direct download
-      const btnDl = document.createElement("button");
-      btnDl.className   = "btn-dl";
-      btnDl.textContent = "⬇ Save";
-      btnDl.title       = "Download via browser";
-      btnDl.onclick     = () => {
-        chrome.runtime.sendMessage({ type: "ZH_DOWNLOAD", item }, res => {
-          if (res?.ok) showStatus("✓ Download started!", true);
-          else showStatus("✗ Download failed: " + (res?.err||""), false);
+      const dl = document.createElement("button");
+      dl.className   = "btn-dl";
+      dl.textContent = "⬇";
+      dl.title       = "Download via browser";
+      dl.onclick = () => {
+        chrome.runtime.sendMessage({ type:"ZH_DOWNLOAD", item }, res => {
+          showStatus(res?.ok ? "✓ Downloading!" : "✗ Failed: "+(res?.err||""), res?.ok);
         });
       };
-      actions.appendChild(btnDl);
+      actions.appendChild(dl);
     }
 
     // Copy URL
-    const btnCopy = document.createElement("button");
-    btnCopy.className   = "btn-copy";
-    btnCopy.textContent = "🔗";
-    btnCopy.title       = "Copy URL";
-    btnCopy.onclick     = () => {
+    const copy = document.createElement("button");
+    copy.className   = "btn-copy";
+    copy.textContent = "🔗";
+    copy.title       = "Copy URL";
+    copy.onclick = () => {
       navigator.clipboard.writeText(item.url).then(() => {
-        btnCopy.textContent = "✓";
-        setTimeout(() => btnCopy.textContent = "🔗", 1500);
+        copy.textContent = "✓";
+        setTimeout(() => copy.textContent = "🔗", 1500);
       });
     };
-    actions.appendChild(btnCopy);
+    actions.appendChild(copy);
 
-    li.appendChild(badge);
-    li.appendChild(info);
-    li.appendChild(actions);
+    li.append(badge, info, actions);
     listEl.appendChild(li);
   });
 }
 
-// ── App ping ──────────────────────────────────────────────────────────────
-
+// ── App ping ───────────────────────────────────────────────────────────────
 async function pingApp() {
-  try {
-    const r = await fetch("http://127.0.0.1:9613/ping", { signal: AbortSignal.timeout(1500) });
-    const d = await r.json();
-    appPingEl.className   = "ping-ok";
-    appPingEl.textContent = `● App v${d.version}`;
-  } catch {
-    appPingEl.className   = "ping-err";
-    appPingEl.textContent = "● App offline";
-  }
+  pingEl.className   = "ping-checking";
+  pingEl.textContent = "● Checking…";
+  chrome.runtime.sendMessage({ type:"ZH_PING_APP" }, res => {
+    if (res?.ok) {
+      pingEl.className   = "ping-ok";
+      pingEl.textContent = "● App online";
+    } else {
+      pingEl.className   = "ping-err";
+      pingEl.textContent = "● App offline";
+    }
+  });
 }
 
-// ── Status toast ──────────────────────────────────────────────────────────
-
-let statusTimer;
+// ── Status toast ───────────────────────────────────────────────────────────
+let stTimer;
 function showStatus(msg, ok) {
-  appStatusEl.textContent = msg;
-  appStatusEl.className   = "app-status show " + (ok ? "ok" : "err");
-  clearTimeout(statusTimer);
-  statusTimer = setTimeout(() => {
-    appStatusEl.className = "app-status";
-  }, 3000);
+  statusEl.textContent = msg;
+  statusEl.className   = "app-status show " + (ok ? "ok" : "err");
+  clearTimeout(stTimer);
+  stTimer = setTimeout(() => statusEl.className = "app-status", 3000);
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────
 
 function shortUrl(url) {
   try {

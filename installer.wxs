@@ -5,49 +5,52 @@
            Language="1033"
            Version="$(var.AppVersion)"
            Manufacturer="$(var.AppAuthor)"
-           UpgradeCode="A1B2C3D4-1234-5678-9ABC-ZH00MOTIONS03">
+           UpgradeCode="41C91AA9-FD94-4AA9-BEF3-C5CADFC2ED87">
+
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
-             Description="$(var.AppName) — Universal Download Manager"
-             Comments="Built by $(var.AppAuthor) · zhmotions.com"
+             Description="$(var.AppName) - Universal Download Manager"
              Manufacturer="$(var.AppAuthor)" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of $(var.AppName) is already installed." />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
+
     <Icon Id="AppIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON"  Value="AppIcon.ico" />
     <Property Id="ARPHELPLINK"     Value="https://zhmotions.com" />
     <Property Id="ARPURLINFOABOUT" Value="https://zhmotions.com" />
-    <Property Id="ARPNOREPAIR"     Value="yes" Secure="yes" />
-    <Property Id="ARPNOMODIFY"     Value="yes" Secure="yes" />
+
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="$(var.AppName)">
-          <Component Id="MainExecutable" Guid="B1C2D3E4-AAAA-BBBB-CCCC-ZH00EXE00001" Win64="yes">
+          <Component Id="MainExecutable" Guid="BEF0493E-D02D-4BCF-A51B-F8C19B71CDAA" Win64="yes">
             <File Id="AppExe" Source="$(var.ExePath)" KeyPath="yes" Checksum="yes" />
           </Component>
         </Directory>
       </Directory>
+
       <Directory Id="ProgramMenuFolder">
         <Directory Id="AppMenuFolder" Name="$(var.AppName)">
-          <Component Id="StartMenuShortcut" Guid="C2D3E4F5-AAAA-BBBB-CCCC-ZH00SRT00001">
-            <Shortcut Id="StartMenuShortcutLink"
+          <Component Id="StartMenuShortcut" Guid="E9A37D14-7B1C-4CE3-B6C0-9764E198500A">
+            <Shortcut Id="StartMenuLink"
                       Name="$(var.AppName)"
                       Description="Universal Download Manager by ZH Motions"
                       Target="[INSTALLFOLDER]ZHDownloader.exe"
                       WorkingDirectory="INSTALLFOLDER"
                       Icon="AppIcon.ico" IconIndex="0" />
-            <Shortcut Id="UninstallShortcut"
+            <Shortcut Id="UninstallLink"
                       Name="Uninstall $(var.AppName)"
                       Target="[SystemFolder]msiexec.exe"
                       Arguments="/x [ProductCode]" />
-            <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+            <RemoveFolder Id="RemoveMenuFolder" On="uninstall" />
             <RegistryValue Root="HKCU" Key="Software\ZHMotions\ZHDownloader"
                            Name="installed" Type="integer" Value="1" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
+
       <Directory Id="DesktopFolder" Name="Desktop">
-        <Component Id="DesktopShortcut" Guid="D3E4F5A6-AAAA-BBBB-CCCC-ZH00DSK00001">
-          <Shortcut Id="DesktopShortcutLink"
+        <Component Id="DesktopShortcut" Guid="A07941A7-6065-4D0E-ACEB-078D4A0CC21D">
+          <Shortcut Id="DesktopLink"
                     Name="$(var.AppName)"
                     Description="Universal Download Manager by ZH Motions"
                     Target="[INSTALLFOLDER]ZHDownloader.exe"
@@ -58,17 +61,21 @@
         </Component>
       </Directory>
     </Directory>
+
     <Feature Id="MainFeature" Title="$(var.AppName)" Level="1">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
+
     <UIRef Id="WixUI_InstallDir" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
     <Property Id="WixShellExecTarget" Value="[#AppExe]" />
     <CustomAction Id="LaunchApp" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
     <InstallExecuteSequence>
       <Custom Action="LaunchApp" After="InstallFinalize">NOT Installed</Custom>
     </InstallExecuteSequence>
+
   </Product>
 </Wix>

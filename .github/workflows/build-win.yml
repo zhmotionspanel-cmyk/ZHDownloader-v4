@@ -1,4 +1,4 @@
-name: Build — Windows EXE + macOS DMG/PKG
+name: Build — Windows EXE + MSI + macOS DMG/PKG
 
 on:
   push:
@@ -18,7 +18,10 @@ jobs:
       - name: Install ffmpeg
         run: choco install ffmpeg -y --no-progress
 
-      - name: Locate ffmpeg path
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y --no-progress
+
+      - name: Locate ffmpeg
         id: ffmpeg
         shell: pwsh
         run: |
@@ -38,16 +41,41 @@ jobs:
             --noconfirm --clean --windowed --onefile `
             --name "ZHDownloader" `
             --icon "assets\AppIcon.ico" `
-            --version-file "assets\version_info.txt" `
             --add-data "assets;assets" `
             --add-binary "${{ steps.ffmpeg.outputs.path }};." `
             zh_downloader.py
 
-      - name: Upload EXE
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $WIX = (Get-ChildItem 'C:\Program Files (x86)\WiX Toolset*' | Select-Object -First 1).FullName + '\bin'
+          $env:Path = "$WIX;$env:Path"
+          candle.exe -nologo -arch x64 `
+            -dAppName="ZH Downloader" `
+            -dAppVersion=4.0.0 `
+            -dAppAuthor="ZH Motions" `
+            -dExePath="dist\ZHDownloader.exe" `
+            -dIconPath="assets\AppIcon.ico" `
+            -out dist\installer.wixobj `
+            installer.wxs
+          light.exe -nologo `
+            -ext WixUIExtension `
+            -ext WixUtilExtension `
+            -cultures:en-us `
+            -out "dist\ZHDownloader-Setup.msi" `
+            dist\installer.wixobj
+
+      - name: Upload EXE (portable)
         uses: actions/upload-artifact@v4
         with:
           name: ZHDownloader-Windows-EXE
           path: dist/ZHDownloader.exe
+
+      - name: Upload MSI (installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZHDownloader-Windows-MSI
+          path: dist/ZHDownloader-Setup.msi
 
   build-macos:
     runs-on: macos-latest
@@ -94,7 +122,8 @@ jobs:
               STAGE=$(mktemp -d)
               cp -R "dist/ZH Downloader.app" "$STAGE/"
               ln -s /Applications "$STAGE/Applications"
-              hdiutil create -volname "ZH Downloader" -srcfolder "$STAGE" -ov -format UDZO "ZHDownloader-macOS.dmg"
+              hdiutil create -volname "ZH Downloader" \
+                -srcfolder "$STAGE" -ov -format UDZO "ZHDownloader-macOS.dmg"
             }
 
       - name: Build .pkg
@@ -106,7 +135,7 @@ jobs:
           pkgbuild \
             --root "$PKG_ROOT" \
             --identifier "com.zhmotions.downloader" \
-            --version "1.1.0" \
+            --version "4.0.0" \
             --install-location "/" \
             "$COMP_DIR/component.pkg"
           cat > "$COMP_DIR/dist.xml" << 'DISTEOF'
@@ -118,13 +147,13 @@ jobs:
             <choices-outline><line choice="default"><line choice="com.zhmotions.downloader"/></line></choices-outline>
             <choice id="default"/>
             <choice id="com.zhmotions.downloader" visible="false"><pkg-ref id="com.zhmotions.downloader"/></choice>
-            <pkg-ref id="com.zhmotions.downloader" version="1.1.0" onConclusion="none">component.pkg</pkg-ref>
+            <pkg-ref id="com.zhmotions.downloader" version="4.0.0" onConclusion="none">component.pkg</pkg-ref>
           </installer-gui-script>
           DISTEOF
           productbuild \
             --distribution "$COMP_DIR/dist.xml" \
             --package-path "$COMP_DIR" \
-            --version "1.1.0" \
+            --version "4.0.0" \
             "ZHDownloader-macOS.pkg"
 
       - name: Upload DMG
@@ -138,3 +167,22 @@ jobs:
         with:
           name: ZHDownloader-macOS-PKG
           path: ZHDownloader-macOS.pkg
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

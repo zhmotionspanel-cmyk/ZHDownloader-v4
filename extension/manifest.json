@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ZH Downloader",
-  "version": "2.0.0",
-  "description": "One-click download for videos, audio, and any file. ZH Motions internal tool.",
+  "version": "3.0.0",
+  "description": "Universal download manager — intercepts downloads, detects media, right-click menu. ZH Motions.",
   "author": "ZH Motions",
   "icons": {
     "16": "icons/icon16.png",
@@ -26,8 +26,14 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle",
-      "all_frames": true
+      "run_at": "document_end",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["<all_urls>"]
     }
   ],
   "permissions": [
@@ -38,7 +44,9 @@
     "tabs",
     "scripting",
     "notifications",
-    "webNavigation"
+    "webNavigation",
+    "contextMenus",
+    "declarativeNetRequest"
   ],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:9613/*"],
   "minimum_chrome_version": "100"

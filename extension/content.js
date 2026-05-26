@@ -1,439 +1,564 @@
-// ZH Downloader v4 — content script
-// Clean rewrite: floating button + mini window + download interception
-
 (function() {
-'use strict';
+  'use strict';
 
-// ── Config ──────────────────────────────────────────────────────────────
-const FILE_EXT = /\.(mp4|webm|mkv|mov|flv|m4v|mp3|m4a|aac|wav|flac|ogg|pdf|zip|rar|7z|exe|dmg|pkg|msi|apk|iso|gz|bz2|docx?|xlsx?|pptx?|jpg|jpeg|png|gif|webp|epub|torrent)(\?|$)/i;
-const VIDEO_HOSTS = ["youtube.com","youtu.be","vimeo.com","tiktok.com","instagram.com","facebook.com","twitter.com","x.com","twitch.tv","reddit.com","dailymotion.com","soundcloud.com","bilibili.com","rumble.com","streamable.com","artgrid.io","artlist.io","pinterest.com"];
-const IS_VIDEO_SITE = VIDEO_HOSTS.some(h => location.hostname.includes(h));
+  // Already injected?
+  if (window.__zhLoaded) return;
+  window.__zhLoaded = true;
 
-// ── State ────────────────────────────────────────────────────────────────
-const state = {
-  items:     [],
-  floatBtn:  null,
-  miniWin:   null,
-  winOpen:   false,
-  drag: { active:false, moved:false, startX:0, startY:0, origLeft:0, origTop:0 },
-};
+  const VIDEO_HOSTS = ['youtube.com','youtu.be','vimeo.com','tiktok.com',
+    'instagram.com','facebook.com','twitter.com','x.com','twitch.tv',
+    'reddit.com','dailymotion.com','soundcloud.com','bilibili.com',
+    'rumble.com','streamable.com','artgrid.io','artlist.io','pinterest.com'];
 
-// ── CSS ──────────────────────────────────────────────────────────────────
-const S = document.createElement("style");
-S.textContent = `
-#_zhfb{position:fixed;bottom:80px;right:20px;z-index:2147483647;
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:default}
-#_zhfb-wrap{display:flex;align-items:center;gap:8px;
-  background:#1c0800;border:1.5px solid #ff6b35;border-radius:50px;
-  padding:8px 14px 8px 10px;box-shadow:0 4px 20px rgba(255,80,20,.4);
-  transition:box-shadow .15s}
-#_zhfb:hover #_zhfb-wrap{box-shadow:0 6px 28px rgba(255,80,20,.6)}
-#_zhfb-icon{width:24px;height:24px;border-radius:6px;flex-shrink:0;pointer-events:none}
-#_zhfb-label{font-size:13px;font-weight:600;color:#ff8c42;
-  white-space:nowrap;pointer-events:none;user-select:none}
-#_zhmw{position:fixed;width:320px;z-index:2147483647;display:none;
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  background:#160800;border:1px solid #3d1e08;border-radius:12px;
-  box-shadow:0 8px 40px rgba(0,0,0,.7)}
-#_zhmw.show{display:block}
-#_zhmw-hdr{display:flex;align-items:center;gap:8px;padding:10px 14px;
-  background:#1c0800;border-bottom:1px solid #2e1005;
-  border-radius:12px 12px 0 0;cursor:move;user-select:none}
-#_zhmw-hdr img{width:20px;height:20px;border-radius:5px;pointer-events:none}
-#_zhmw-title{flex:1;font-size:12px;font-weight:600;color:#ff8c42;pointer-events:none}
-#_zhmw-x{width:16px;height:16px;border-radius:50%;background:#eb5757;
-  border:none;cursor:pointer;color:#fff;font-size:10px;
-  display:flex;align-items:center;justify-content:center;flex-shrink:0}
-#_zhmw-body{padding:8px 12px;max-height:260px;overflow-y:auto}
-#_zhmw-body::-webkit-scrollbar{width:3px}
-#_zhmw-body::-webkit-scrollbar-thumb{background:#3d1e08;border-radius:3px}
-#_zhmw-foot{padding:8px 12px;border-top:1px solid #2e1005;display:flex;gap:6px}
-._zhitem{background:#1e0d02;border:1px solid #2e1005;border-radius:8px;
-  padding:8px 10px;margin-bottom:6px}
-._zhtop{display:flex;align-items:center;gap:6px;margin-bottom:4px}
-._zhbadge{font-size:9px;font-weight:700;padding:2px 5px;
-  border-radius:3px;flex-shrink:0}
-._zhbadge.v{background:#1a3a2a;color:#6fcf97}
-._zhbadge.a{background:#1a2a3a;color:#56ccf2}
-._zhbadge.h{background:#2a1a3a;color:#bb86fc}
-._zhbadge.f{background:#2a2a1a;color:#f2c94c}
-._zhname{font-size:11px;color:#ffddc0;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;flex:1}
-._zhsz{font-size:10px;color:rgba(255,140,66,.5);flex-shrink:0}
-._zhprog{height:3px;background:#2e1005;border-radius:3px;
-  margin-bottom:4px;overflow:hidden}
-._zhpf{height:100%;background:linear-gradient(90deg,#ff6b35,#ffaa55);
-  border-radius:3px;transition:width .3s}
-._zhpf.done{background:#6fcf97;width:100%}
-._zhst{font-size:10px;color:rgba(255,140,66,.4);margin-bottom:4px}
-._zhacts{display:flex;gap:5px}
-._zhbtn{flex:1;padding:6px 8px;border-radius:6px;border:none;
-  font-size:12px;font-weight:600;cursor:pointer}
-._zhbtn.p{background:#ff6b35;color:#fff}
-._zhbtn.p:hover{background:#ff8c50}
-._zhbtn.g{background:#2e1005;color:#ff8c42;border:1px solid #3d1e08}
-._zhbtn.g:hover{background:#3d1e08}
-._zhfbtn{flex:1;padding:7px;border-radius:7px;border:none;
-  font-size:12px;font-weight:600;cursor:pointer}
-._zhfbtn.p{background:#ff6b35;color:#fff}
-._zhfbtn.g{background:#1e0d02;color:#ff8c42;border:1px solid #3d1e08}
-#_zhtoast{position:fixed;z-index:2147483647;top:16px;left:50%;
-  transform:translateX(-50%);padding:9px 18px;border-radius:8px;
-  font-family:-apple-system,sans-serif;font-size:13px;font-weight:500;
-  box-shadow:0 4px 20px rgba(0,0,0,.5);display:none;white-space:nowrap;
-  pointer-events:none}
-#_zhtoast.ok{background:#1a2e1a;color:#6fcf97;border:1px solid #6fcf97}
-#_zhtoast.err{background:#2e1a1a;color:#eb5757;border:1px solid #eb5757}
-`;
-document.head.appendChild(S);
+  const FILE_EXT = /\.(mp4|webm|mkv|mov|mp3|m4a|aac|wav|flac|pdf|zip|rar|7z|exe|dmg|pkg|msi|apk|iso|gz|bz2|docx?|xlsx?|pptx?|jpg|jpeg|png|gif|webp|epub)(\?|$)/i;
 
-// ── Toast ────────────────────────────────────────────────────────────────
-let _toastTimer;
-function toast(msg, type) {
-  let el = document.getElementById("_zhtoast");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "_zhtoast";
-    document.body.appendChild(el);
-  }
-  el.textContent = msg;
-  el.className   = type === "err" ? "err" : "ok";
-  el.style.display = "block";
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { el.style.display = "none"; }, 2800);
-}
+  const isVideoSite = VIDEO_HOSTS.some(h => location.hostname.includes(h));
 
-// ── Helpers ──────────────────────────────────────────────────────────────
-function fmtSz(b) {
-  if (!b) return "";
-  if (b > 1073741824) return (b/1073741824).toFixed(1)+" GB";
-  if (b > 1048576)    return (b/1048576).toFixed(1)+" MB";
-  if (b > 1024)       return (b/1024).toFixed(0)+" KB";
-  return b+"B";
-}
-function badgeCls(t) {
-  if (["HLS","DASH","STREAM"].includes(t)) return "h";
-  if (["MP4","WEBM","VIDEO","MKV"].includes(t)) return "v";
-  if (t === "AUDIO") return "a";
-  return "f";
-}
-function shortName(url) {
-  try {
-    const p = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "");
-    return p.slice(0, 45) || url.slice(0, 45);
-  } catch { return url.slice(0, 45); }
-}
+  // ── shared state ──────────────────────────────────────────────────────
+  const S = { items: [], btn: null, win: null, winVisible: false };
 
-// ── Items ────────────────────────────────────────────────────────────────
-function addItem(item) {
-  if (state.items.some(i => i.url === item.url)) return false;
-  state.items.unshift(item);
-  if (state.items.length > 40) state.items.length = 40;
-  renderItems();
-  updateLabel();
-  return true;
-}
-
-function renderItems() {
-  const body = document.getElementById("_zhmw-body");
-  if (!body) return;
-  if (!state.items.length) {
-    body.innerHTML = '<div style="text-align:center;color:rgba(255,140,66,.35);font-size:12px;padding:20px 0">No media detected yet.<br>Play a video or visit a file page.</div>';
-    return;
-  }
-  body.innerHTML = state.items.map((it, i) => `
-    <div class="_zhitem">
-      <div class="_zhtop">
-        <span class="_zhbadge ${badgeCls(it.type)}">${it.type}</span>
-        <span class="_zhname" title="${it.url}">${it.name || shortName(it.url)}</span>
-        <span class="_zhsz">${it.size || ""}</span>
-      </div>
-      <div class="_zhprog"><div class="_zhpf ${it.pct >= 100 ? 'done' : ''}" style="width:${it.pct||0}%"></div></div>
-      <div class="_zhst">${it.status || "Ready"}</div>
-      <div class="_zhacts">
-        <button class="_zhbtn p" onclick="_zhDL(${i})">Download</button>
-        <button class="_zhbtn g" onclick="_zhCopy(${i})">Copy URL</button>
-      </div>
-    </div>`).join("");
-}
-
-function updateLabel() {
-  const lbl = document.getElementById("_zhfb-label");
-  if (lbl) lbl.textContent = state.items.length > 0 ? `Download (${state.items.length})` : "Download";
-}
-
-// ── Global handlers (called from innerHTML) ───────────────────────────────
-window._zhDL = function(i) {
-  const it = state.items[i];
-  if (!it) return;
-  state.items[i].status = "Sending...";
-  renderItems();
-  chrome.runtime.sendMessage(
-    { type: "ZH_SEND_TO_APP", url: it.url, referer: it.referer || location.href },
-    function(res) {
-      if (res && res.ok) {
-        state.items[i].status = "Sent to app!";
-        renderItems();
-        toast("Sent to ZH Downloader!");
-      } else {
-        state.items[i].status = "Ready";
-        renderItems();
-        toast("Open ZH Downloader app first!", "err");
-      }
+  // ── CSS ───────────────────────────────────────────────────────────────
+  const style = document.createElement('style');
+  style.id = '__zh_style';
+  style.textContent = `
+    #__zhbtn {
+      all: initial;
+      position: fixed !important;
+      bottom: 80px !important;
+      right: 20px !important;
+      z-index: 2147483647 !important;
+      cursor: pointer !important;
+      font-family: -apple-system, sans-serif !important;
     }
-  );
-};
+    #__zhbtn .wrap {
+      display: flex !important;
+      align-items: center !important;
+      gap: 8px !important;
+      background: #1c0800 !important;
+      border: 1.5px solid #ff6b35 !important;
+      border-radius: 50px !important;
+      padding: 8px 14px 8px 10px !important;
+      box-shadow: 0 4px 20px rgba(255,80,20,.45) !important;
+      pointer-events: none !important;
+    }
+    #__zhbtn:hover .wrap {
+      box-shadow: 0 6px 28px rgba(255,80,20,.65) !important;
+    }
+    #__zhbtn .icon {
+      width: 24px !important; height: 24px !important;
+      border-radius: 6px !important; flex-shrink: 0 !important;
+    }
+    #__zhbtn .lbl {
+      font-size: 13px !important; font-weight: 600 !important;
+      color: #ff8c42 !important; white-space: nowrap !important;
+      user-select: none !important;
+    }
 
-window._zhCopy = function(i) {
-  const it = state.items[i];
-  if (!it) return;
-  navigator.clipboard.writeText(it.url)
-    .then(() => toast("URL copied!"))
-    .catch(() => {
-      const el = document.createElement("textarea");
-      el.value = it.url;
+    #__zhwin {
+      all: initial;
+      position: fixed !important;
+      width: 320px !important;
+      z-index: 2147483647 !important;
+      display: none !important;
+      font-family: -apple-system, sans-serif !important;
+      background: #160800 !important;
+      border: 1px solid #3d1e08 !important;
+      border-radius: 12px !important;
+      box-shadow: 0 8px 40px rgba(0,0,0,.7) !important;
+      overflow: hidden !important;
+    }
+    #__zhwin.open { display: block !important; }
+
+    .__zhwin_hdr {
+      display: flex !important; align-items: center !important;
+      gap: 8px !important; padding: 10px 14px !important;
+      background: #1c0800 !important;
+      border-bottom: 1px solid #2e1005 !important;
+      cursor: move !important; user-select: none !important;
+    }
+    .__zhwin_hdr img {
+      width: 20px !important; height: 20px !important;
+      border-radius: 5px !important; pointer-events: none !important;
+    }
+    .__zhwin_title {
+      flex: 1 !important; font-size: 12px !important;
+      font-weight: 600 !important; color: #ff8c42 !important;
+      pointer-events: none !important;
+    }
+    .__zhwin_x {
+      width: 16px !important; height: 16px !important;
+      border-radius: 50% !important; background: #eb5757 !important;
+      border: none !important; cursor: pointer !important;
+      color: #fff !important; font-size: 10px !important;
+      display: flex !important; align-items: center !important;
+      justify-content: center !important; flex-shrink: 0 !important;
+    }
+    .__zhwin_body {
+      padding: 8px 12px !important;
+      max-height: 260px !important; overflow-y: auto !important;
+    }
+    .__zhwin_foot {
+      padding: 8px 12px !important;
+      border-top: 1px solid #2e1005 !important;
+      display: flex !important; gap: 6px !important;
+    }
+    .__zhitem {
+      background: #1e0d02 !important;
+      border: 1px solid #2e1005 !important;
+      border-radius: 8px !important;
+      padding: 8px 10px !important; margin-bottom: 6px !important;
+    }
+    .__zhitem_top {
+      display: flex !important; align-items: center !important;
+      gap: 6px !important; margin-bottom: 4px !important;
+    }
+    .__zhbadge {
+      font-size: 9px !important; font-weight: 700 !important;
+      padding: 2px 5px !important; border-radius: 3px !important;
+      flex-shrink: 0 !important;
+    }
+    .__zhbadge.v { background: #1a3a2a !important; color: #6fcf97 !important; }
+    .__zhbadge.h { background: #2a1a3a !important; color: #bb86fc !important; }
+    .__zhbadge.a { background: #1a2a3a !important; color: #56ccf2 !important; }
+    .__zhbadge.f { background: #2a2a1a !important; color: #f2c94c !important; }
+    .__zhname {
+      font-size: 11px !important; color: #ffddc0 !important;
+      white-space: nowrap !important; overflow: hidden !important;
+      text-overflow: ellipsis !important; flex: 1 !important;
+    }
+    .__zhsz { font-size: 10px !important; color: rgba(255,140,66,.5) !important; }
+    .__zhpbar {
+      height: 3px !important; background: #2e1005 !important;
+      border-radius: 3px !important; margin-bottom: 4px !important;
+      overflow: hidden !important;
+    }
+    .__zhpfill {
+      height: 100% !important;
+      background: linear-gradient(90deg,#ff6b35,#ffaa55) !important;
+      border-radius: 3px !important; transition: width .3s !important;
+    }
+    .__zhst {
+      font-size: 10px !important; color: rgba(255,140,66,.4) !important;
+      margin-bottom: 4px !important;
+    }
+    .__zhacts { display: flex !important; gap: 5px !important; }
+    .__zhbtn_dl, .__zhbtn_cp {
+      flex: 1 !important; padding: 6px 8px !important;
+      border-radius: 6px !important; border: none !important;
+      font-size: 12px !important; font-weight: 600 !important;
+      cursor: pointer !important;
+    }
+    .__zhbtn_dl {
+      background: #ff6b35 !important; color: #fff !important;
+    }
+    .__zhbtn_cp {
+      background: #2e1005 !important; color: #ff8c42 !important;
+      border: 1px solid #3d1e08 !important;
+    }
+    .__zhfoot_btn {
+      flex: 1 !important; padding: 7px !important;
+      border-radius: 7px !important; border: none !important;
+      font-size: 12px !important; font-weight: 600 !important;
+      cursor: pointer !important;
+    }
+    .__zhfoot_btn.p { background: #ff6b35 !important; color: #fff !important; }
+    .__zhfoot_btn.g {
+      background: #1e0d02 !important; color: #ff8c42 !important;
+      border: 1px solid #3d1e08 !important;
+    }
+    #__zhtoast {
+      position: fixed !important; z-index: 2147483647 !important;
+      top: 16px !important; left: 50% !important;
+      transform: translateX(-50%) !important;
+      padding: 9px 18px !important; border-radius: 8px !important;
+      font-family: -apple-system, sans-serif !important;
+      font-size: 13px !important; font-weight: 500 !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,.5) !important;
+      display: none !important; white-space: nowrap !important;
+      pointer-events: none !important;
+    }
+    #__zhtoast.ok  { background:#1a2e1a !important; color:#6fcf97 !important; border:1px solid #6fcf97 !important; }
+    #__zhtoast.err { background:#2e1a1a !important; color:#eb5757 !important; border:1px solid #eb5757 !important; }
+  `;
+  document.head.appendChild(style);
+
+  // ── Toast ─────────────────────────────────────────────────────────────
+  let toastTimer;
+  function toast(msg, type) {
+    let el = document.getElementById('__zhtoast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = '__zhtoast';
       document.body.appendChild(el);
-      el.select();
-      document.execCommand("copy");
-      el.remove();
-      toast("URL copied!");
-    });
-};
-
-window._zhPageDL = function() {
-  chrome.runtime.sendMessage(
-    { type: "ZH_SEND_TO_APP", url: location.href },
-    function(res) {
-      toast(res && res.ok ? "Sent page to app!" : "Open ZH Downloader app first!", res && res.ok ? "ok" : "err");
     }
-  );
-};
+    el.textContent = msg;
+    el.className = type === 'err' ? 'err' : 'ok';
+    el.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function() { el.style.display = 'none'; }, 2800);
+  }
 
-// ── Mini window ───────────────────────────────────────────────────────────
-function buildMiniWin() {
-  if (state.miniWin) return;
-  const div = document.createElement("div");
-  div.id = "_zhmw";
-  div.innerHTML = `
-    <div id="_zhmw-hdr">
-      <img src="${chrome.runtime.getURL("icons/icon48.png")}" alt="">
-      <span id="_zhmw-title">ZH Downloader</span>
-      <button id="_zhmw-x">x</button>
-    </div>
-    <div id="_zhmw-body"></div>
-    <div id="_zhmw-foot">
-      <button class="_zhfbtn g" onclick="document.getElementById('_zhmw').classList.remove('show');_zhState.winOpen=false">Hide</button>
-      <button class="_zhfbtn p" onclick="_zhPageDL()">Download Page</button>
-    </div>`;
-  document.body.appendChild(div);
-  state.miniWin = div;
+  // ── Helpers ───────────────────────────────────────────────────────────
+  function fmtSize(b) {
+    if (!b) return '';
+    if (b > 1073741824) return (b/1073741824).toFixed(1)+' GB';
+    if (b > 1048576)    return (b/1048576).toFixed(1)+' MB';
+    if (b > 1024)       return (b/1024).toFixed(0)+' KB';
+    return b+'B';
+  }
+  function badgeCls(t) {
+    if (['HLS','DASH','STREAM'].includes(t)) return 'h';
+    if (['MP4','WEBM','VIDEO','MKV'].includes(t)) return 'v';
+    if (t === 'AUDIO') return 'a';
+    return 'f';
+  }
+  function shortUrl(url) {
+    try {
+      var p = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || '');
+      return (p || url).slice(0, 40);
+    } catch(e) { return url.slice(0, 40); }
+  }
+  function iconUrl(name) {
+    return chrome.runtime.getURL('icons/' + name);
+  }
 
-  document.getElementById("_zhmw-x").onclick = function() {
-    state.miniWin.classList.remove("show");
-    state.winOpen = false;
-  };
-
-  // Drag header
-  const hdr = document.getElementById("_zhmw-hdr");
-  let mDown = false, mX = 0, mY = 0, mL = 0, mT = 0;
-  hdr.addEventListener("mousedown", function(e) {
-    if (e.target.id === "_zhmw-x") return;
-    mDown = true;
-    mX = e.clientX; mY = e.clientY;
-    const r = div.getBoundingClientRect();
-    mL = r.left; mT = r.top;
-    div.style.right = "auto"; div.style.bottom = "auto";
-    div.style.left = mL+"px"; div.style.top = mT+"px";
-    e.preventDefault();
-  });
-  document.addEventListener("mousemove", function(e) {
-    if (!mDown) return;
-    div.style.left = (mL + e.clientX - mX) + "px";
-    div.style.top  = (mT + e.clientY - mY) + "px";
-  });
-  document.addEventListener("mouseup", function() { mDown = false; });
-
-  renderItems();
-}
-
-// expose state for inline onclick
-window._zhState = state;
-
-function toggleWin() {
-  buildMiniWin();
-  state.winOpen = !state.winOpen;
-  if (state.winOpen) {
-    state.miniWin.classList.add("show");
-    // Position above/beside the float button
-    const fb = state.floatBtn;
-    if (fb) {
-      const r = fb.getBoundingClientRect();
-      const winW = 320, winH = 320;
-      let left = r.right - winW;
-      let top  = r.top - winH - 8;
-      if (left < 4) left = 4;
-      if (top < 4) top = r.bottom + 8;
-      state.miniWin.style.right  = "auto";
-      state.miniWin.style.bottom = "auto";
-      state.miniWin.style.left   = left + "px";
-      state.miniWin.style.top    = top  + "px";
-    }
+  // ── Items ─────────────────────────────────────────────────────────────
+  function addItem(item) {
+    if (S.items.some(function(i) { return i.url === item.url; })) return false;
+    S.items.unshift(item);
+    if (S.items.length > 40) S.items.length = 40;
     renderItems();
-  } else {
-    state.miniWin.classList.remove("show");
+    updateBtnLabel();
+    return true;
   }
-}
 
-// ── Floating button ───────────────────────────────────────────────────────
-function buildFloatBtn() {
-  if (state.floatBtn) return;
-  const btn = document.createElement("div");
-  btn.id = "_zhfb";
-  btn.innerHTML = `
-    <div id="_zhfb-wrap">
-      <img id="_zhfb-icon" src="${chrome.runtime.getURL("icons/icon48.png")}" alt="">
-      <span id="_zhfb-label">Download</span>
-    </div>`;
-  document.body.appendChild(btn);
-  state.floatBtn = btn;
+  function updateBtnLabel() {
+    var lbl = document.querySelector('#__zhbtn .lbl');
+    if (lbl) lbl.textContent = S.items.length > 0
+      ? 'Download (' + S.items.length + ')'
+      : 'Download';
+  }
 
-  // ── Drag + Click (completely separate) ──────────────────────────────
-  const d = state.drag;
-
-  btn.addEventListener("mousedown", function(e) {
-    if (e.button !== 0) return;
-    d.active  = true;
-    d.moved   = false;
-    d.startX  = e.clientX;
-    d.startY  = e.clientY;
-    const r   = btn.getBoundingClientRect();
-    d.origLeft = r.left;
-    d.origTop  = r.top;
-    // Switch to absolute positioning for drag
-    btn.style.right  = "auto";
-    btn.style.bottom = "auto";
-    btn.style.left   = r.left + "px";
-    btn.style.top    = r.top  + "px";
-    e.preventDefault();
-    e.stopPropagation();
-  });
-
-  document.addEventListener("mousemove", function(e) {
-    if (!d.active) return;
-    const dx = e.clientX - d.startX;
-    const dy = e.clientY - d.startY;
-    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
-    if (d.moved) {
-      btn.style.left = (d.origLeft + dx) + "px";
-      btn.style.top  = (d.origTop  + dy) + "px";
+  function renderItems() {
+    var body = document.querySelector('#__zhwin .__zhwin_body');
+    if (!body) return;
+    if (!S.items.length) {
+      body.innerHTML = '<div style="text-align:center;color:rgba(255,140,66,.35);font-size:12px;padding:20px 0">No media detected yet.<br>Play a video or visit a page with files.</div>';
+      return;
     }
-  });
+    body.innerHTML = S.items.map(function(it, i) {
+      return '<div class="__zhitem">' +
+        '<div class="__zhitem_top">' +
+          '<span class="__zhbadge ' + badgeCls(it.type) + '">' + it.type + '</span>' +
+          '<span class="__zhname" title="' + it.url + '">' + (it.name || shortUrl(it.url)) + '</span>' +
+          '<span class="__zhsz">' + (it.size || '') + '</span>' +
+        '</div>' +
+        '<div class="__zhpbar"><div class="__zhpfill" style="width:' + (it.pct||0) + '%"></div></div>' +
+        '<div class="__zhst">' + (it.status || 'Ready') + '</div>' +
+        '<div class="__zhacts">' +
+          '<button class="__zhbtn_dl" data-idx="' + i + '">Download</button>' +
+          '<button class="__zhbtn_cp" data-idx="' + i + '">Copy URL</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
 
-  document.addEventListener("mouseup", function(e) {
-    if (!d.active) return;
-    const wasMoved = d.moved;
-    d.active = false;
-    d.moved  = false;
-    if (!wasMoved) {
-      // Pure click — toggle window
-      toggleWin();
-    }
-  });
-}
-
-// ── Show float button ─────────────────────────────────────────────────────
-function showFloatBtn() {
-  if (document.body) buildFloatBtn();
-  else document.addEventListener("DOMContentLoaded", buildFloatBtn);
-}
-
-if (IS_VIDEO_SITE) showFloatBtn();
-
-// YouTube: show only on /watch pages
-if (location.hostname.includes("youtube.com")) {
-  let lastPath = location.pathname;
-  new MutationObserver(function() {
-    if (location.pathname !== lastPath) {
-      lastPath = location.pathname;
-      if (location.pathname === "/watch" && !state.floatBtn) showFloatBtn();
-    }
-  }).observe(document.documentElement, { childList: true, subtree: false });
-}
-
-// ── Background → content messages ────────────────────────────────────────
-chrome.runtime.onMessage.addListener(function(msg) {
-  if (msg.type !== "ZH_UPDATED") return;
-  let added = 0;
-  (msg.items || []).forEach(function(it) {
-    if (addItem({
-      url:     it.url,
-      type:    it.type,
-      name:    it.name || shortName(it.url),
-      size:    it.sizeStr || "",
-      referer: it.referer || location.href,
-      pct:     0,
-      status:  "Ready",
-    })) added++;
-  });
-  if (added > 0 && !state.floatBtn) showFloatBtn();
-});
-
-// ── DOM scan ──────────────────────────────────────────────────────────────
-function scan() {
-  const seen = new Set(state.items.map(i => i.url));
-  // Videos
-  document.querySelectorAll("video,audio").forEach(function(el) {
-    [el.src, el.currentSrc].concat(
-      Array.from(el.querySelectorAll("source")).map(s => s.src)
-    ).filter(s => s && !seen.has(s)).forEach(function(s) {
-      addItem({ url:s, type:"VIDEO", name:document.title.slice(0,40),
-                size:"", referer:location.href, pct:0, status:"Ready" });
-      seen.add(s);
+    // Attach click handlers
+    body.querySelectorAll('.__zhbtn_dl').forEach(function(btn) {
+      btn.addEventListener('click', function() { dlItem(parseInt(btn.dataset.idx)); });
     });
-  });
-  // File links
-  document.querySelectorAll("a[href]").forEach(function(a) {
-    if (a.href && FILE_EXT.test(a.href) && !seen.has(a.href)) {
-      addItem({ url:a.href, type:"FILE",
-                name:(a.textContent||"").trim().slice(0,40)||shortName(a.href),
-                size:"", referer:location.href, pct:0, status:"Ready" });
-      seen.add(a.href);
+    body.querySelectorAll('.__zhbtn_cp').forEach(function(btn) {
+      btn.addEventListener('click', function() { cpItem(parseInt(btn.dataset.idx)); });
+    });
+  }
+
+  function dlItem(i) {
+    var it = S.items[i];
+    if (!it) return;
+    // blob: URLs are internal — use page URL instead
+    var sendUrl = it.url;
+    if (sendUrl.startsWith('blob:') || sendUrl.startsWith('data:')) {
+      sendUrl = location.href;
     }
+    S.items[i].status = 'Sending...';
+    renderItems();
+    chrome.runtime.sendMessage(
+      { type: 'ZH_SEND_TO_APP', url: sendUrl, referer: location.href },
+      function(res) {
+        if (res && res.ok) {
+          S.items[i].status = 'Sent! Downloading...';
+          renderItems();
+          toast('Sent to ZH Downloader!');
+        } else {
+          S.items[i].status = 'Ready';
+          renderItems();
+          toast('Open ZH Downloader app first!', 'err');
+        }
+      }
+    );
+  }
+
+  function cpItem(i) {
+    var it = S.items[i];
+    if (!it) return;
+    try {
+      navigator.clipboard.writeText(it.url).then(function() { toast('URL copied!'); });
+    } catch(e) {
+      var t = document.createElement('textarea');
+      t.value = it.url;
+      document.body.appendChild(t);
+      t.select();
+      document.execCommand('copy');
+      t.remove();
+      toast('URL copied!');
+    }
+  }
+
+  // ── Mini window ───────────────────────────────────────────────────────
+  function buildWin() {
+    if (S.win) return;
+    var div = document.createElement('div');
+    div.id = '__zhwin';
+    div.innerHTML =
+      '<div class="__zhwin_hdr" id="__zhwin_hdr">' +
+        '<img src="' + iconUrl('icon48.png') + '" alt="">' +
+        '<span class="__zhwin_title">ZH Downloader</span>' +
+        '<button class="__zhwin_x" id="__zhwin_x">x</button>' +
+      '</div>' +
+      '<div class="__zhwin_body"></div>' +
+      '<div class="__zhwin_foot">' +
+        '<button class="__zhfoot_btn g" id="__zhwin_hide">Hide</button>' +
+        '<button class="__zhfoot_btn p" id="__zhwin_page">Download Page</button>' +
+      '</div>';
+    document.body.appendChild(div);
+    S.win = div;
+
+    document.getElementById('__zhwin_x').addEventListener('click', function() {
+      hideWin();
+    });
+    document.getElementById('__zhwin_hide').addEventListener('click', function() {
+      hideWin();
+    });
+    document.getElementById('__zhwin_page').addEventListener('click', function() {
+      chrome.runtime.sendMessage(
+        { type: 'ZH_SEND_TO_APP', url: location.href },
+        function(res) {
+          toast(res && res.ok ? 'Sent page to app!' : 'Open ZH Downloader app first!',
+                res && res.ok ? 'ok' : 'err');
+        }
+      );
+    });
+
+    // Drag header
+    var hdr = document.getElementById('__zhwin_hdr');
+    var dragging = false, ox = 0, oy = 0, ol = 0, ot = 0;
+    hdr.addEventListener('mousedown', function(e) {
+      if (e.target.id === '__zhwin_x') return;
+      dragging = true;
+      ox = e.clientX; oy = e.clientY;
+      var r = div.getBoundingClientRect();
+      ol = r.left; ot = r.top;
+      div.style.right = 'auto'; div.style.bottom = 'auto';
+      div.style.left = ol + 'px'; div.style.top = ot + 'px';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      div.style.left = (ol + e.clientX - ox) + 'px';
+      div.style.top  = (ot + e.clientY - oy) + 'px';
+    });
+    document.addEventListener('mouseup', function() { dragging = false; });
+
+    renderItems();
+  }
+
+  function showWin() {
+    buildWin();
+    // Position above float button
+    if (S.btn) {
+      var r = S.btn.getBoundingClientRect();
+      var ww = 320, wh = 320;
+      var left = Math.max(4, r.right - ww);
+      var top  = r.top - wh - 8;
+      if (top < 4) top = r.bottom + 8;
+      S.win.style.right  = 'auto';
+      S.win.style.bottom = 'auto';
+      S.win.style.left   = left + 'px';
+      S.win.style.top    = top  + 'px';
+    }
+    S.win.classList.add('open');
+    S.winVisible = true;
+    renderItems();
+  }
+
+  function hideWin() {
+    if (S.win) S.win.classList.remove('open');
+    S.winVisible = false;
+  }
+
+  function toggleWin() {
+    // One click = direct download of current page
+    var sendUrl = location.href;
+    chrome.runtime.sendMessage(
+      { type: 'ZH_SEND_TO_APP', url: sendUrl, referer: sendUrl },
+      function(res) {
+        if (res && res.ok) {
+          toast('Sent to ZH Downloader!');
+        } else {
+          toast('Open ZH Downloader app first!', 'err');
+        }
+      }
+    );
+  }
+
+  // ── Floating button ───────────────────────────────────────────────────
+  function buildBtn() {
+    if (S.btn) return;
+    var btn = document.createElement('div');
+    btn.id = '__zhbtn';
+    btn.innerHTML =
+      '<div class="wrap">' +
+        '<img class="icon" src="' + iconUrl('icon48.png') + '" alt="">' +
+        '<span class="lbl">Download</span>' +
+      '</div>';
+    document.body.appendChild(btn);
+    S.btn = btn;
+
+    // Drag + click
+    var dragging = false, moved = false;
+    var startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+    btn.addEventListener('mousedown', function(e) {
+      if (e.button !== 0) return;
+      dragging = true;
+      moved    = false;
+      startX   = e.clientX;
+      startY   = e.clientY;
+      var r    = btn.getBoundingClientRect();
+      origLeft = r.left;
+      origTop  = r.top;
+      btn.style.right  = 'auto';
+      btn.style.bottom = 'auto';
+      btn.style.left   = origLeft + 'px';
+      btn.style.top    = origTop  + 'px';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      var dx = e.clientX - startX;
+      var dy = e.clientY - startY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+      if (moved) {
+        btn.style.left = (origLeft + dx) + 'px';
+        btn.style.top  = (origTop  + dy) + 'px';
+      }
+    });
+
+    document.addEventListener('mouseup', function(e) {
+      if (!dragging) return;
+      var wasMoved = moved;
+      dragging = false;
+      moved    = false;
+      if (!wasMoved) toggleWin();
+    });
+  }
+
+  function initBtn() {
+    if (document.body) buildBtn();
+    else document.addEventListener('DOMContentLoaded', buildBtn);
+  }
+
+  if (isVideoSite) initBtn();
+
+  // YouTube: only on watch pages
+  if (location.hostname.includes('youtube.com')) {
+    var lastPath = '';
+    new MutationObserver(function() {
+      if (location.pathname !== lastPath) {
+        lastPath = location.pathname;
+        if (location.pathname === '/watch' && !S.btn) initBtn();
+      }
+    }).observe(document.documentElement, { childList: true, subtree: false });
+  }
+
+  // ── Background messages ───────────────────────────────────────────────
+  chrome.runtime.onMessage.addListener(function(msg) {
+    if (msg.type !== 'ZH_UPDATED') return;
+    var added = 0;
+    (msg.items || []).forEach(function(it) {
+      if (addItem({
+        url:     it.url,
+        type:    it.type,
+        name:    it.name || shortUrl(it.url),
+        size:    it.sizeStr || '',
+        referer: it.referer || location.href,
+        pct:     0,
+        status:  'Ready',
+      })) added++;
+    });
+    if (added > 0 && !S.btn) initBtn();
   });
-}
 
-scan();
-let _scanTimer;
-new MutationObserver(function() {
-  clearTimeout(_scanTimer);
-  _scanTimer = setTimeout(scan, 1000);
-}).observe(document.body || document.documentElement, { childList:true, subtree:true });
-
-document.addEventListener("visibilitychange", function() {
-  if (!document.hidden) scan();
-});
-
-// ── Click intercept ───────────────────────────────────────────────────────
-document.addEventListener("click", function(e) {
-  const el = e.target.closest("a[href],[download]");
-  if (!el) return;
-  let url = "";
-  if (el.tagName === "A" && el.href && (el.hasAttribute("download") || FILE_EXT.test(el.href))) {
-    url = el.href;
+  // ── DOM scan ──────────────────────────────────────────────────────────
+  function scan() {
+    var seen = {};
+    S.items.forEach(function(i) { seen[i.url] = true; });
+    document.querySelectorAll('video,audio').forEach(function(el) {
+      [el.src, el.currentSrc].concat(
+        Array.from(el.querySelectorAll('source')).map(function(s) { return s.src; })
+      ).filter(function(s) {
+        // Skip blob/data URLs — use page URL for video sites
+        return s && !seen[s] && !s.startsWith('blob:') && !s.startsWith('data:');
+      }).forEach(function(s) {
+        addItem({ url:s, type:'VIDEO', name:document.title.slice(0,40),
+                  size:'', referer:location.href, pct:0, status:'Ready' });
+        seen[s] = true;
+      });
+    });
+    // For video sites — always add page URL as downloadable item
+    if (isVideoSite && !seen[location.href]) {
+      addItem({ url:location.href, type:'VIDEO', name:document.title.slice(0,60),
+                size:'', referer:location.href, pct:0, status:'Ready' });
+      seen[location.href] = true;
+    }
+    document.querySelectorAll('a[href]').forEach(function(a) {
+      if (a.href && FILE_EXT.test(a.href) && !seen[a.href]) {
+        addItem({ url:a.href, type:'FILE',
+                  name:(a.textContent||'').trim().slice(0,40)||shortUrl(a.href),
+                  size:'', referer:location.href, pct:0, status:'Ready' });
+        seen[a.href] = true;
+      }
+    });
   }
-  if (!url) {
-    url = el.getAttribute("data-url") || el.getAttribute("data-download-url") || "";
-  }
-  if (!url || !FILE_EXT.test(url)) return;
-  e.preventDefault();
-  e.stopPropagation();
-  addItem({ url, type:"FILE", name:shortName(url), size:"",
-            referer:location.href, pct:0, status:"Ready" });
-  showFloatBtn();
-  buildMiniWin();
-  state.winOpen = true;
-  state.miniWin.classList.add("show");
-  toast("Click Download in the panel to start");
-}, true);
+
+  scan();
+  var scanTimer;
+  new MutationObserver(function() {
+    clearTimeout(scanTimer);
+    scanTimer = setTimeout(scan, 1000);
+  }).observe(document.body || document.documentElement, { childList:true, subtree:true });
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) scan();
+  });
+
+  // ── Download link intercept ───────────────────────────────────────────
+  document.addEventListener('click', function(e) {
+    var el = e.target;
+    while (el && el !== document) {
+      if (el.tagName === 'A' && el.href) {
+        if (el.hasAttribute('download') || FILE_EXT.test(el.href)) {
+          e.preventDefault();
+          e.stopPropagation();
+          addItem({ url:el.href, type:'FILE', name:shortUrl(el.href),
+                    size:'', referer:location.href, pct:0, status:'Ready' });
+          initBtn();
+          showWin();
+          toast('Click Download in the panel to start');
+          return;
+        }
+      }
+      el = el.parentElement;
+    }
+  }, true);
 
 })();

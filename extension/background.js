@@ -1,211 +1,347 @@
-// ZH Downloader v2 — background service worker
-// Sniffs ALL media + general files across the browser
+// ZH Downloader v3 — background service worker
+// Full browser integration: intercept downloads, context menu, media capture
 
-const MEDIA_EXT    = /\.(mp4|m3u8|mpd|webm|mov|mkv|flv|avi|m4v|m4a|mp3|aac|ogg|wav|flac)(\?|$)/i;
-const FILE_EXT     = /\.(pdf|zip|rar|7z|exe|dmg|pkg|msi|apk|iso|tar|gz|bz2|docx?|xlsx?|pptx?|jpg|jpeg|png|gif|webp|svg|psd|ai|epub|torrent)(\?|$)/i;
-const SEGMENT_EXT  = /\.(ts|m4s|fmp4)(\?|$)/i;
-const SKIP_KW      = /(chunk-stream|segment-|seg-\d|\/seg\/|\/chunk\/|\.vtt(\?|$)|\.srt(\?|$))/i;
-const MEDIA_TYPE   = /^(video|audio)\//i;
-const MEDIA_KW     = /(videoplayback|manifest\.mpd|master\.m3u8|playlist\.m3u8)/i;
+const MEDIA_EXT   = /\.(mp4|m3u8|mpd|webm|mov|mkv|flv|ts|m4v|m4a|mp3|aac|ogg|wav|flac)(\?|$)/i;
+const FILE_EXT    = /\.(pdf|zip|rar|7z|exe|dmg|pkg|msi|apk|iso|tar|gz|bz2|docx?|xlsx?|pptx?|jpg|jpeg|png|gif|webp|svg|epub|torrent)(\?|$)/i;
+const SEGMENT_EXT = /\.(ts|m4s|fmp4)(\?|$)/i;
+const SKIP_KW     = /(\/seg\/|\/chunk\/|seg-\d+\.|chunk-\d+\.|\.vtt(\?|$)|\.srt(\?|$)|thumbnail|poster|sprite)/i;
+const STREAM_KW   = /(\.m3u8|\.mpd|manifest|playlist|master|stream|preview|hls|dash|videoplayback)/i;
+const MEDIA_TYPE  = /^(video|audio)\//i;
 
-const tabState = new Map();
+const STOCK_SITES = [
+  "artgrid.io","artlist.io","storyblocks.com","pond5.com","shutterstock.com",
+  "istockphoto.com","motionarray.com","envato.com","videohive.net",
+  "vimeo.com","wistia.com","brightcove","jwplatform","akamaized.net","cloudfront.net"
+];
 
-function getTabBucket(tabId) {
-  if (!tabState.has(tabId)) tabState.set(tabId, []);
-  return tabState.get(tabId);
+const VIDEO_HOSTS = [
+  "youtube.com","youtu.be","vimeo.com","tiktok.com","instagram.com",
+  "facebook.com","fb.watch","twitter.com","x.com","twitch.tv",
+  "reddit.com","dailymotion.com","soundcloud.com","bilibili.com",
+  "rumble.com","streamable.com","artgrid.io","artlist.io","pinterest.com"
+];
+
+const tabState  = new Map();
+let   intercept = true;   // global intercept toggle
+let   whitelist = [];     // sites where ZH is disabled
+let   blacklist = [];     // sites where ZH is always active
+
+// ── Storage: load settings ─────────────────────────────────────────────────
+chrome.storage.local.get(["intercept","whitelist","blacklist"], r => {
+  intercept = r.intercept !== false;
+  whitelist = r.whitelist || [];
+  blacklist = r.blacklist || [];
+});
+
+// ── Tab state ──────────────────────────────────────────────────────────────
+function getTab(id) {
+  if (!tabState.has(id)) tabState.set(id, []);
+  return tabState.get(id);
 }
 
-function isWanted(url, ctype) {
+function isWanted(url, ctype, initiator) {
   if (!url) return false;
-  if (SEGMENT_EXT.test(url)) return false;
+  try { new URL(url); } catch { return false; }
+  if (SEGMENT_EXT.test(url) && !url.includes("master") && !url.includes("playlist")) return false;
   if (SKIP_KW.test(url)) return false;
-  if (ctype && (MEDIA_TYPE.test(ctype) || ctype.includes("application/pdf") || ctype.includes("application/zip") || ctype.includes("application/octet-stream"))) return true;
-  if (MEDIA_EXT.test(url) || FILE_EXT.test(url) || MEDIA_KW.test(url)) return true;
+  if (STREAM_KW.test(url)) return true;
+  if (ctype && MEDIA_TYPE.test(ctype)) return true;
+  if (MEDIA_EXT.test(url)) return true;
+  if (FILE_EXT.test(url)) return true;
+  if (initiator && STOCK_SITES.some(s => initiator.includes(s))) {
+    if (url.includes("preview") || url.includes("sample")) return true;
+  }
+  if (ctype && (ctype.includes("octet-stream") || ctype.includes("x-mpegURL"))) return true;
   return false;
 }
 
-function classify(url, ctype) {
+function classifyUrl(url, ctype) {
   const u = url.toLowerCase();
-  if (u.includes(".m3u8") || u.includes("master.m3u8")) return "HLS";
-  if (u.includes(".mpd"))  return "DASH";
-  if (u.match(/\.mp4(\?|$)/))  return "MP4";
-  if (u.match(/\.webm(\?|$)/)) return "WEBM";
-  if (u.match(/\.mkv(\?|$)/))  return "MKV";
-  if (u.match(/\.(mp3|m4a|aac|ogg|wav|flac)(\?|$)/)) return "AUDIO";
-  if (u.match(/\.pdf(\?|$)/))  return "PDF";
-  if (u.match(/\.(zip|rar|7z|tar|gz)(\?|$)/)) return "ZIP";
-  if (u.match(/\.(exe|dmg|pkg|msi|apk)(\?|$)/)) return "INSTALLER";
-  if (u.match(/\.(jpg|jpeg|png|gif|webp|svg)(\?|$)/)) return "IMAGE";
-  if (u.match(/\.(docx?|xlsx?|pptx?)(\?|$)/)) return "DOC";
-  if (u.includes("videoplayback")) return "STREAM";
-  if (ctype && ctype.startsWith("video/")) return "VIDEO";
-  if (ctype && ctype.startsWith("audio/")) return "AUDIO";
-  if (ctype && ctype.includes("pdf")) return "PDF";
+  if (u.includes(".m3u8") || (ctype||"").includes("mpegURL")) return "HLS";
+  if (u.includes(".mpd")  || (ctype||"").includes("dash+xml")) return "DASH";
+  if (u.includes("videoplayback") || u.includes("googlevideo")) return "STREAM";
+  if (u.match(/\.(mp4|mov|mkv|webm|flv)(\?|$)/)) return "MP4";
+  if (u.match(/\.(mp3|m4a|aac|wav|flac|ogg)(\?|$)/)) return "AUDIO";
+  if (u.match(/\.pdf(\?|$)/)) return "PDF";
+  if (u.match(/\.(zip|rar|7z)(\?|$)/)) return "ZIP";
+  if ((ctype||"").startsWith("video/")) return "VIDEO";
+  if ((ctype||"").startsWith("audio/")) return "AUDIO";
   return "FILE";
 }
 
-function fileNameFromUrl(url) {
+function nameFromUrl(url) {
   try {
-    const u    = new URL(url);
-    const name = u.pathname.split("/").filter(Boolean).pop() || u.hostname;
-    return decodeURIComponent(name).slice(0, 100);
-  } catch { return "file"; }
+    const u = new URL(url);
+    return decodeURIComponent(u.pathname.split("/").filter(Boolean).pop() || u.hostname).slice(0,100);
+  } catch { return url.slice(0,60); }
 }
 
-function fmtSize(bytes) {
-  if (!bytes || bytes === 0) return "";
-  if (bytes > 1073741824) return (bytes/1073741824).toFixed(1)+" GB";
-  if (bytes > 1048576)    return (bytes/1048576).toFixed(1)+" MB";
-  if (bytes > 1024)       return (bytes/1024).toFixed(0)+" KB";
-  return bytes+" B";
+function fmtSize(b) {
+  if (!b) return "";
+  if (b > 1073741824) return (b/1073741824).toFixed(1)+" GB";
+  if (b > 1048576)    return (b/1048576).toFixed(1)+" MB";
+  if (b > 1024)       return (b/1024).toFixed(0)+" KB";
+  return b+" B";
 }
 
-function pushItem(tabId, item) {
-  const bucket = getTabBucket(tabId);
+function push(tabId, item) {
+  const bucket = getTab(tabId);
   if (bucket.some(b => b.url === item.url)) return;
   bucket.unshift(item);
-  if (bucket.length > 80) bucket.length = 80;
+  if (bucket.length > 100) bucket.length = 100;
   updateBadge(tabId);
-  broadcast(tabId);
+  chrome.runtime.sendMessage({ type:"ZH_UPDATED", tabId, items:bucket }).catch(()=>{});
 }
 
 function updateBadge(tabId) {
-  const count = getTabBucket(tabId).length;
-  chrome.action.setBadgeBackgroundColor({ color: "#d4a13a" });
-  chrome.action.setBadgeTextColor({ color: "#0a0a0a" }).catch(()=>{});
-  chrome.action.setBadgeText({ tabId, text: count > 0 ? String(count) : "" });
+  const n = getTab(tabId).length;
+  chrome.action.setBadgeBackgroundColor({ color:"#ff6b35" });
+  chrome.action.setBadgeText({ tabId, text: n>0 ? String(n) : "" });
 }
 
-function broadcast(tabId) {
-  chrome.runtime.sendMessage({ type: "ZH_UPDATED", tabId, items: getTabBucket(tabId) }).catch(()=>{});
-}
-
-// Sniff network requests
+// ── Network media capture ──────────────────────────────────────────────────
 chrome.webRequest.onResponseStarted.addListener(details => {
   if (details.tabId < 0) return;
-  const headers = (details.responseHeaders||[]).reduce((m,h) => { m[h.name.toLowerCase()] = h.value; return m; }, {});
-  const ctype   = headers["content-type"] || "";
-  if (!isWanted(details.url, ctype)) return;
-  const size    = parseInt(headers["content-length"]||"0", 10);
-  pushItem(details.tabId, {
-    url:    details.url,
-    type:   classify(details.url, ctype),
-    mime:   ctype,
-    size,
-    sizeStr: fmtSize(size),
-    name:   fileNameFromUrl(details.url),
-    source: "network",
-    ts:     Date.now()
+  const h   = (details.responseHeaders||[]).reduce((m,h) => { m[h.name.toLowerCase()]=h.value; return m; }, {});
+  const ct  = h["content-type"] || "";
+  const ini = details.initiator || "";
+  if (!isWanted(details.url, ct, ini)) return;
+  const size = parseInt(h["content-length"]||"0", 10);
+  push(details.tabId, {
+    url:     details.url,
+    type:    classifyUrl(details.url, ct),
+    mime:    ct,
+    size,    sizeStr: fmtSize(size),
+    name:    nameFromUrl(details.url),
+    source:  "network",
+    referer: details.url,
+    ts:      Date.now()
   });
-}, { urls: ["<all_urls>"] }, ["responseHeaders"]);
+}, { urls:["<all_urls>"] }, ["responseHeaders"]);
 
-// Messages from popup/content
+// ── Intercept browser downloads → send to app ──────────────────────────────
+// Never intercept these sites
+const SKIP_HOSTS = [
+  "github.com", "githubusercontent.com", "githubassets.com",
+  "127.0.0.1", "localhost",
+  "google.com", "googleapis.com", "gstatic.com",
+  "apple.com", "microsoft.com", "windows.com",
+  "chrome.google.com", "extensions",
+];
+
+// Only intercept these file types
+const MEDIA_RE = /\.(mp4|webm|mkv|mov|flv|avi|mp3|m4a|wav|flac|aac|ogg|m3u8|mpd|ts|m4s)(\?|$)/i;
+const FILE_RE  = /\.(pdf|zip|rar|7z|exe|dmg|pkg|msi|apk|iso|tar\.gz|tar|gz|bz2|epub|torrent)(\?|$)/i;
+
+chrome.downloads.onCreated.addListener(async downloadItem => {
+  if (!intercept) return;
+  const url = downloadItem.url || downloadItem.finalUrl || "";
+  if (!url || url.startsWith("blob:") || url.startsWith("data:")) return;
+
+  // Skip non-media/file sites
+  try {
+    const host = new URL(url).hostname;
+    if (SKIP_HOSTS.some(s => host.includes(s))) return;
+  } catch { return; }
+
+  // Only intercept actual media/file downloads
+  const fname = downloadItem.filename || "";
+  const isMedia = MEDIA_RE.test(url) || MEDIA_RE.test(fname);
+  const isFile  = FILE_RE.test(url)  || FILE_RE.test(fname);
+  if (!isMedia && !isFile) return;
+
+  // Check whitelist
+  try {
+    const tabs = await chrome.tabs.query({ active:true, currentWindow:true });
+    const tabUrl = tabs[0]?.url || "";
+    if (whitelist.some(w => tabUrl.includes(w))) return;
+  } catch {}
+
+  // Cancel and send to app
+  try {
+    await chrome.downloads.cancel(downloadItem.id);
+    await chrome.downloads.erase({ id: downloadItem.id });
+  } catch {}
+
+  const ok = await sendToApp(url);
+  if (!ok.ok) {
+    chrome.downloads.download({ url });
+  }
+});
+
+// ── Context menu ───────────────────────────────────────────────────────────
+chrome.runtime.onInstalled.addListener(() => {
+  // Main download option
+  chrome.contextMenus.create({
+    id:       "zh-download-link",
+    title:    "⬇  Download with ZH Downloader",
+    contexts: ["link","video","audio","image"],
+  });
+  chrome.contextMenus.create({
+    id:       "zh-download-page",
+    title:    "⬇  Download this page (video/audio)",
+    contexts: ["page"],
+  });
+  chrome.contextMenus.create({
+    id:       "zh-separator",
+    type:     "separator",
+    contexts: ["link","video","audio","image","page"],
+  });
+  chrome.contextMenus.create({
+    id:       "zh-toggle",
+    title:    "⏸  Disable ZH Downloader on this site",
+    contexts: ["page"],
+  });
+  chrome.contextMenus.create({
+    id:       "zh-open-app",
+    title:    "🚀  Open ZH Downloader app",
+    contexts: ["page","link"],
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "zh-download-link") {
+    const url = info.linkUrl || info.srcUrl || info.pageUrl;
+    await sendToApp(url, info.pageUrl);
+  }
+  else if (info.menuItemId === "zh-download-page") {
+    await sendToApp(tab.url);
+  }
+  else if (info.menuItemId === "zh-toggle") {
+    try {
+      const host = new URL(tab.url).hostname;
+      const idx  = whitelist.indexOf(host);
+      if (idx >= 0) {
+        whitelist.splice(idx, 1);
+        chrome.contextMenus.update("zh-toggle", { title:"⏸  Disable ZH Downloader on this site" });
+        notify("ZH Downloader enabled", `Active on ${host}`);
+      } else {
+        whitelist.push(host);
+        chrome.contextMenus.update("zh-toggle", { title:"▶  Enable ZH Downloader on this site" });
+        notify("ZH Downloader disabled", `Paused on ${host}`);
+      }
+      chrome.storage.local.set({ whitelist });
+    } catch {}
+  }
+  else if (info.menuItemId === "zh-open-app") {
+    // Ping app — if offline show notification
+    const r = await pingApp();
+    if (!r) notify("ZH Downloader", "App is not running. Open the desktop app first.");
+  }
+});
+
+// ── Messages from popup/content ────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg?.type) return;
 
-  // DOM-scanned items from content.js
   if (msg.type === "ZH_DOM" && sender.tab) {
     for (const item of msg.items||[]) {
-      pushItem(sender.tab.id, {
-        url:    item.url,
-        type:   classify(item.url, item.mime||""),
-        mime:   item.mime||"",
-        size:   0,
-        sizeStr:"",
-        name:   item.name || fileNameFromUrl(item.url),
-        source: "dom",
-        title:  item.title||"",
-        ts:     Date.now()
+      push(sender.tab.id, {
+        url: item.url, type: classifyUrl(item.url, item.mime||""),
+        mime: item.mime||"", size:0, sizeStr:"",
+        name: item.name || nameFromUrl(item.url),
+        source:"dom", title: item.title||"", ts: Date.now()
       });
     }
   }
 
-  // Popup asking for current tab info
   if (msg.type === "ZH_GET_TAB") {
     chrome.tabs.query({ active:true, currentWindow:true }, tabs => {
       if (!tabs.length) { sendResponse({ tabId:null, items:[] }); return; }
       const tab = tabs[0];
-      sendResponse({ tabId: tab.id, url: tab.url, title: tab.title, items: getTabBucket(tab.id) });
+      sendResponse({
+        tabId: tab.id, url: tab.url, title: tab.title,
+        items: getTab(tab.id),
+        intercept,
+        isDisabled: whitelist.some(w => (tab.url||"").includes(w))
+      });
     });
     return true;
   }
 
-  // Clear tab items
   if (msg.type === "ZH_CLEAR" && msg.tabId != null) {
-    tabState.set(msg.tabId, []);
-    updateBadge(msg.tabId);
-    broadcast(msg.tabId);
+    tabState.set(msg.tabId, []); updateBadge(msg.tabId);
   }
 
-  // Send URL to desktop app
   if (msg.type === "ZH_SEND_TO_APP") {
-    sendToApp(msg.url).then(r => sendResponse(r));
+    sendToApp(msg.url, msg.referer).then(r => sendResponse(r));
     return true;
   }
 
-  // Direct browser download
   if (msg.type === "ZH_DOWNLOAD") {
     handleDownload(msg.item).then(r => sendResponse(r));
     return true;
   }
 
-  // Download current page URL
   if (msg.type === "ZH_PAGE_URL") {
     chrome.tabs.query({ active:true, currentWindow:true }, tabs => {
-      if (!tabs.length) { sendResponse({ ok:false }); return; }
+      if (!tabs.length) { sendResponse({ok:false}); return; }
       sendToApp(tabs[0].url).then(r => sendResponse(r));
     });
     return true;
   }
+
+  if (msg.type === "ZH_TOGGLE_INTERCEPT") {
+    intercept = msg.value;
+    chrome.storage.local.set({ intercept });
+    sendResponse({ ok:true, intercept });
+  }
+
+  if (msg.type === "ZH_PING_APP") {
+    pingApp().then(ok => sendResponse({ ok }));
+    return true;
+  }
 });
 
-// Send URL to ZH Downloader desktop app via HTTP bridge
-async function sendToApp(url) {
+// ── Send to desktop app ────────────────────────────────────────────────────
+async function sendToApp(url, referer) {
   try {
     const r = await fetch("http://127.0.0.1:9613/download", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ url }),
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ url, referer: referer||url }),
     });
-    const data = await r.json();
-    if (data.ok) {
-      chrome.notifications.create({
-        type: "basic", iconUrl: "icons/icon128.png",
-        title: "ZH Downloader", message: `Sent to app: ${url.slice(0,60)}…`
-      });
-    }
-    return data;
+    const d = await r.json();
+    if (d.ok) notify("Sent to ZH Downloader", url.slice(0,60)+"…");
+    return d;
   } catch(e) {
-    chrome.notifications.create({
-      type: "basic", iconUrl: "icons/icon128.png",
-      title: "ZH Downloader — App not running",
-      message: "Open ZH Downloader app first, then try again."
-    });
-    return { ok:false, err: String(e) };
-  }
-}
-
-async function handleDownload(item) {
-  if (!item?.url) return { ok:false, err:"no url" };
-  // Streams → send to desktop app
-  if (item.type === "HLS" || item.type === "DASH" || item.type === "STREAM") {
-    return sendToApp(item.url);
-  }
-  // Direct files → browser download
-  try {
-    const id = await chrome.downloads.download({
-      url: item.url,
-      filename: item.name || fileNameFromUrl(item.url),
-      saveAs: false
-    });
-    return { ok:true, id };
-  } catch(e) {
+    notify("ZH Downloader — App not running", "Open the desktop app first.");
     return { ok:false, err:String(e) };
   }
 }
 
-// Cleanup on tab close/navigate
+async function pingApp() {
+  try {
+    const r = await fetch("http://127.0.0.1:9613/ping",
+                          { signal: AbortSignal.timeout(1500) });
+    const d = await r.json();
+    return d.ok;
+  } catch { return false; }
+}
+
+async function handleDownload(item) {
+  if (!item?.url) return { ok:false };
+  if (["HLS","DASH","STREAM"].includes(item.type)) {
+    return sendToApp(item.url, item.referer||item.url);
+  }
+  try {
+    const id = await chrome.downloads.download({
+      url: item.url, filename: item.name || nameFromUrl(item.url), saveAs:false
+    });
+    return { ok:true, id };
+  } catch(e) { return { ok:false, err:String(e) }; }
+}
+
+function notify(title, body) {
+  chrome.notifications.create({
+    type:"basic", iconUrl:"icons/icon128.png", title, message: body||""
+  });
+}
+
+// ── Cleanup ────────────────────────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener(tabId => tabState.delete(tabId));
-chrome.webNavigation.onCommitted.addListener(d => {
-  if (d.frameId === 0) { tabState.set(d.tabId, []); updateBadge(d.tabId); }
-});
+if (chrome.webNavigation) {
+  chrome.webNavigation.onCommitted.addListener(d => {
+    if (d.frameId === 0) { tabState.set(d.tabId, []); updateBadge(d.tabId); }
+  });
+}
