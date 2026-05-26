@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.1.8"
+APP_VER     = "5.2.0"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -200,22 +200,29 @@ def type_badge(url):
     return "FILE"
 
 # -- Format options ---------------------------------------------------------
-_H264 = "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
-_H264_CAP = "bestvideo[vcodec^=avc1][height<={h}]+bestaudio[acodec^=mp4a]/bestvideo[ext=mp4][height<={h}]+bestaudio[ext=m4a]/best[ext=mp4][height<={h}]/best[height<={h}]"
+# Aggressive HD floor: require height>=1080 for HD format, height>=2160 for 4K.
+# If source has no HD/4K, yt-dlp errors and we report quality unavailable.
+# This prevents silent 360p downloads when user wants HD.
+_4K = (
+    "bestvideo[height>=2160][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+    "bestvideo[height>=2160]+bestaudio/"
+    "bestvideo[height>=1440][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+    "bestvideo[height>=1440]+bestaudio/"
+    "bestvideo[height>=1080]+bestaudio/best"
+)
+_HD = (
+    "bestvideo[height>=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+    "bestvideo[height>=1080][ext=mp4]+bestaudio[ext=m4a]/"
+    "bestvideo[height>=1080]+bestaudio/"
+    "bestvideo[height>=720]+bestaudio/best"
+)
 
 FMTS = {
-    # HD/4K only — Premiere Pro compatible (force avc1 + transcode VP9/AV1)
-    "h264_best": {"label":"Best Quality (Premiere Pro)", "fmt":_H264,                    "merge":"mp4", "fb":"best[ext=mp4]/best",  "pp_compat":True},
-    "h264_2160": {"label":"4K Premiere Pro",             "fmt":_H264_CAP.format(h=2160), "merge":"mp4", "fb":"best[height<=2160]", "pp_compat":True},
-    "h264_1080": {"label":"1080p Premiere Pro",          "fmt":_H264_CAP.format(h=1080), "merge":"mp4", "fb":"best[height<=1080]", "pp_compat":True},
-    # HD/4K — raw (any codec, faster, no transcode)
-    "best_mp4":  {"label":"Best MP4 (raw)",  "fmt":"bestvideo+bestaudio/best",                                       "merge":"mp4", "fb":"best"},
-    "2160p":     {"label":"4K (raw)",        "fmt":"bestvideo[height<=2160]+bestaudio/best[height<=2160]",           "merge":"mp4", "fb":"best[height<=2160]"},
-    "1080p":     {"label":"1080p (raw)",     "fmt":"bestvideo[height<=1080]+bestaudio/best[height<=1080]",           "merge":"mp4", "fb":"best[height<=1080]"},
+    "4k":      {"label":"4K (2160p)",   "fmt":_4K, "merge":"mp4", "fb":"best", "pp_compat":True},
+    "hd":      {"label":"HD (1080p)",   "fmt":_HD, "merge":"mp4", "fb":"best", "pp_compat":True},
     # Audio only
-    "mp3":       {"label":"Audio MP3",       "fmt":"ba/b",                       "audio":"mp3"},
-    "wav":       {"label":"Audio WAV",       "fmt":"ba/b",                       "audio":"wav"},
-    "m4a":       {"label":"Audio M4A",       "fmt":"ba[ext=m4a]/ba/b",           "audio":"m4a"},
+    "mp3":     {"label":"Audio MP3",    "fmt":"ba/b", "audio":"mp3"},
+    "wav":     {"label":"Audio WAV",    "fmt":"ba/b", "audio":"wav"},
 }
 
 _HEIGHT_RE = re.compile(r"height<=(\d+)")
@@ -474,7 +481,7 @@ class App:
             if path.exists(): default_cookies = browser; break
 
         self.cfg       = jload(CFG_PATH, {
-            "dir":DEFAULT_DIR, "fmt":"h264_best", "cookies":default_cookies, "clip":True,
+            "dir":DEFAULT_DIR, "fmt":"4k", "cookies":default_cookies, "clip":True,
             "theme":"Light", "concurrent":2, "rate_kbps":0, "categorize":False,
             "completion_sound":True, "shutdown_after":False, "conflict":"rename",
         })
@@ -1495,7 +1502,7 @@ class App:
         out = self.folder_var.get().strip() or DEFAULT_DIR
         Path(out).mkdir(parents=True, exist_ok=True)
         fk = self.fmt_var.get().split(":")[0].strip()
-        if fk not in FMTS: fk="best_mp4"
+        if fk not in FMTS: fk="4k"
 
         self.cfg.update({"dir":out,"fmt":fk,"cookies":self.ck_var.get(),
                          "clip":self._clip_on.get()})
@@ -1652,8 +1659,8 @@ class App:
             "cms-public" in url_l or "footage-hls" in url_l
         ))
         if is_hls:
-            m = _HEIGHT_RE.search(f["fmt"])
-            chosen = f"best[height<={m.group(1)}]/best" if m else "best"
+            # HLS: pick highest available variant (Artgrid/Artlist serve only what URL allows)
+            chosen = "best"
         elif is_youtube:
             chosen = f["fmt"]
         elif not self.ff and "fb" in f:
@@ -1824,6 +1831,11 @@ class App:
                 else:
                     raise
             if item.done_f: self._rename_if_uuid(item, url)
+            # Force H.264 transcode for HLS sources when pp_compat selected.
+            # FFmpegVideoConvertor skips if input already .mp4, even if codec is
+            # not H.264. Explicit ffmpeg pass guarantees avc1 output for editors.
+            if self.ff and item.done_f and FMTS.get(fk,{}).get("pp_compat"):
+                self._force_h264_if_needed(item)
             if not self._stop.is_set():
                 item.status="done"; item.pct=100
                 self._mq.put(("item_up",item))
@@ -1838,6 +1850,47 @@ class App:
             self.log(f"[error] unexpected: {e}")
             item.status="error"
             self._mq.put(("item_up",item))
+
+    def _force_h264_if_needed(self, item):
+        """If downloaded file's video codec isn't avc1/h264, re-encode in place."""
+        try:
+            p = Path(item.done_f)
+            if not p.exists() or p.suffix.lower() not in (".mp4",".mkv",".mov",".webm"):
+                return
+            # Probe codec via ffprobe (bundled with ffmpeg usually)
+            ffprobe = shutil.which("ffprobe") or str(Path(self.ff).parent / "ffprobe") if self.ff else None
+            codec = ""
+            if ffprobe and Path(ffprobe).exists():
+                try:
+                    r = subprocess.run([ffprobe, "-v","error","-select_streams","v:0",
+                                        "-show_entries","stream=codec_name",
+                                        "-of","default=nokey=1:noprint_wrappers=1", str(p)],
+                                       capture_output=True, text=True, timeout=15)
+                    codec = (r.stdout or "").strip().lower()
+                except Exception: pass
+            if codec in ("h264","avc1",""):
+                # Already h264 OR couldn't probe (assume OK)
+                if codec: self.log(f"[info] codec already h264 — no re-encode needed")
+                return
+            self.log(f"[info] re-encoding {codec} → h264 for editor compatibility...")
+            tmp = p.parent / (p.stem + ".h264_tmp.mp4")
+            cmd = [self.ff, "-y", "-i", str(p),
+                   "-c:v","libx264","-profile:v","high","-level","5.1",
+                   "-preset","slow","-crf","14","-pix_fmt","yuv420p",
+                   "-x264-params","ref=4:bframes=4",
+                   "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
+                   "-movflags","+faststart","-tag:v","avc1",
+                   str(tmp)]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            if r.returncode == 0 and tmp.exists():
+                p.unlink(missing_ok=True)
+                tmp.rename(p)
+                self.log(f"[done] transcoded to h264")
+            else:
+                self.log(f"[warn] re-encode failed: {(r.stderr or '')[:200]}")
+                tmp.unlink(missing_ok=True)
+        except Exception as e:
+            self.log(f"[warn] force h264 skipped: {e}")
 
     def _extract_slug_from_url(self, url, uuid_pat, generic_skip):
         import re as _re2, urllib.parse as _up
