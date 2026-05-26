@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.1"
+APP_VER     = "5.2.2"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1731,7 +1731,10 @@ class App:
             "no_warnings":                False,
             "extractor_args":             {
                 "youtube": {
-                    "player_client": ["tv_embedded", "mweb", "web_safari", "ios", "android"],
+                    # 'tv' + 'tv_simply' bypass YouTube PoToken — give 1080p without cookies.
+                    # mweb/ios fallback. android last (heavily nerfed).
+                    "player_client": ["default", "tv", "tv_simply", "mweb", "ios", "web_safari", "android"],
+                    "formats": ["dashy", "missing_pot"],
                     "max_comments": ["0"],
                 },
             },
