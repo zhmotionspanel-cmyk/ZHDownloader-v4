@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.1.6"
+APP_VER     = "5.1.7"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1750,22 +1750,23 @@ class App:
         if rate > 0: opts["ratelimit"] = rate
         if self.ff: opts["ffmpeg_location"]=self.ff
         ck = self.ck_var.get()
-        # YouTube post-PoToken: HD/4K requires browser cookies. If user set none,
-        # auto-fallback to chrome (silently — if not installed, yt-dlp ignores).
-        if is_youtube and (not ck or ck == "none"):
-            ck = "chrome"
-            self.log("[info] YouTube needs cookies for HD — auto-using Chrome cookies")
         if ck and ck != "none":
             opts["cookiesfrombrowser"] = (ck,)
+        # YouTube post-PoToken warning (don't force chrome — may fail if Chrome closed/locked)
+        if is_youtube and (not ck or ck == "none"):
+            self.log("[warn] YouTube HD/4K needs browser cookies. Set Cookies dropdown → chrome for 1080p+")
         if "merge" in f and not is_hls: opts["merge_output_format"]=f["merge"]
         if is_hls:
             opts["merge_output_format"] = "mp4"
             opts["final_ext"] = "mp4"
             if self.ff:
                 opts["postprocessors"] = [{"key":"FFmpegVideoConvertor","preferedformat":"mp4"}]
+                # HLS transcode: high quality, slow preset for best compression efficiency
+                # crf 14 ≈ visually lossless. Slower preset = better quality per bitrate.
                 _hls_args = [
-                    "-c:v","libx264","-profile:v","high","-level","4.1",
-                    "-preset","fast","-crf","16","-pix_fmt","yuv420p",
+                    "-c:v","libx264","-profile:v","high","-level","5.1",
+                    "-preset","slow","-crf","14","-pix_fmt","yuv420p",
+                    "-x264-params","ref=4:bframes=4",
                     "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
                     "-movflags","+faststart","-tag:v","avc1",
                 ]
@@ -1782,9 +1783,11 @@ class App:
             opts["final_ext"] = "mp4"
             opts["format_sort"] = ["res", "fps", "vcodec:h264", "acodec:aac", "ext:mp4:m4a", "br"]
             opts["postprocessors"] = [{"key":"FFmpegVideoConvertor","preferedformat":"mp4"}]
+            # Premiere Pro transcode: visually lossless, slow preset for editing
             _pp_args = [
-                "-c:v","libx264","-profile:v","high","-level","4.1",
-                "-preset","medium","-crf","18","-pix_fmt","yuv420p",
+                "-c:v","libx264","-profile:v","high","-level","5.1",
+                "-preset","slow","-crf","14","-pix_fmt","yuv420p",
+                "-x264-params","ref=4:bframes=4",
                 "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
                 "-movflags","+faststart","-tag:v","avc1",
             ]
@@ -1798,8 +1801,28 @@ class App:
     # -- video / file runners ----------------------------------------------
     def _run_video(self, url, out, fk, item):
         opts = self._ydl_opts(out, fk, item, url)
+
+        def _try(o):
+            with yt_dlp.YoutubeDL(o) as ydl: ydl.download([url])
+
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
+            try:
+                _try(opts)
+            except yt_dlp.utils.DownloadError as e:
+                emsg = str(e).lower()
+                if "user_stop" in emsg:
+                    raise
+                # Cookie-related failures → retry without cookies
+                cookie_err = any(k in emsg for k in (
+                    "cookies", "cookiesfrombrowser", "could not copy chrome",
+                    "permission denied", "keyring", "could not find browser"
+                ))
+                if cookie_err and "cookiesfrombrowser" in opts:
+                    self.log("[warn] cookie read failed — retrying without cookies (HD may need login)")
+                    opts2 = dict(opts); opts2.pop("cookiesfrombrowser", None)
+                    _try(opts2)
+                else:
+                    raise
             if item.done_f: self._rename_if_uuid(item, url)
             if not self._stop.is_set():
                 item.status="done"; item.pct=100
