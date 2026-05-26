@@ -39,7 +39,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.1.2"
+APP_VER     = "5.1.3"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -2061,25 +2061,53 @@ class App:
 
     # -- tray icon ----------------------------------------------------------
     def _setup_tray(self):
+        """Defer to after mainloop ready. Any failure here must NOT crash app."""
         self.tray = None
         if not HAS_TRAY or not HAS_PIL: return
+        # Schedule tray setup 1 second after window shows
+        self.root.after(1000, self._init_tray_safe)
+
+    def _init_tray_safe(self):
         try:
             icon_path = self._r("AppIcon.ico") or self._r("AppIcon_512.png") or self._r("header-logo.png")
-            if not icon_path: return
+            if not icon_path:
+                print("[tray] no icon file found"); return
+            # Force-load image data BEFORE handing to pystray
+            # (lazy-load can crash inside pystray's background thread)
             img = Image.open(icon_path)
+            img.load()
+            img = img.copy().convert("RGBA")
+            # Resize for tray
+            img.thumbnail((64, 64), Image.LANCZOS)
+
+            def _safe_cb(handler):
+                """Wrap callback to prevent any exception from killing pystray thread."""
+                def wrapped(icon=None, item=None):
+                    try: handler(icon, item)
+                    except Exception as e: print(f"[tray] callback error: {e}")
+                return wrapped
+
             menu = pystray.Menu(
-                pystray.MenuItem("Show ZH Downloader", self._tray_show, default=True),
-                pystray.MenuItem("Pause all",          self._tray_pause),
-                pystray.MenuItem("Cancel all",         self._tray_cancel),
+                pystray.MenuItem("Show ZH Downloader", _safe_cb(self._tray_show), default=True),
+                pystray.MenuItem("Pause all",          _safe_cb(self._tray_pause)),
+                pystray.MenuItem("Cancel all",         _safe_cb(self._tray_cancel)),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Open download folder", self._tray_open_folder),
+                pystray.MenuItem("Open download folder", _safe_cb(self._tray_open_folder)),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Quit",               self._tray_quit),
+                pystray.MenuItem("Quit",               _safe_cb(self._tray_quit)),
             )
             self.tray = pystray.Icon(APP_NAME, img, APP_NAME, menu)
-            threading.Thread(target=self.tray.run, daemon=True).start()
+
+            def _run_tray():
+                try: self.tray.run()
+                except Exception as e:
+                    print(f"[tray] run failed: {e}")
+                    self.tray = None
+            threading.Thread(target=_run_tray, daemon=True).start()
+            self.log("[tray] icon initialized")
         except Exception as e:
-            self.log(f"[warn] tray icon unavailable: {e}")
+            print(f"[tray] init failed: {e}")
+            self.tray = None
 
     def _tray_show(self, icon=None, item=None):
         self.root.after(0, self._restore_window)
@@ -2134,19 +2162,44 @@ class _Log:
 
 
 def main():
-    # Drag-drop needs TkinterDnD root subclass; some bundles miss tkdnd binary lib
+    """Staged startup so any optional feature failure can't crash app."""
     global HAS_DND
+
+    # Stage 1: probe tkdnd binary BEFORE creating root.
+    # Bundled .app may have Python wrapper but no native .dylib/.dll.
+    if HAS_DND:
+        try:
+            _probe = tk.Tk()
+            _probe.withdraw()
+            _probe.tk.call('package', 'require', 'tkdnd')
+            _probe.destroy()
+        except Exception as e:
+            print(f"[warn] tkdnd probe failed ({e}); drag-drop disabled")
+            HAS_DND = False
+            try: _probe.destroy()
+            except: pass
+
+    # Stage 2: build real root with chosen class
     root = None
     if HAS_DND:
         try:
             root = TkinterDnD.Tk()
         except Exception as e:
-            print(f"[warn] tkdnd library load failed ({e}); drag-drop disabled")
+            print(f"[warn] TkinterDnD.Tk() failed ({e}); fallback to tk.Tk()")
             HAS_DND = False
-            root = None
     if root is None:
         root = tk.Tk()
-    App(root)
+
+    # Stage 3: build App with global exception guard
+    try:
+        App(root)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try: messagebox.showerror(APP_NAME, f"Startup failed:\n{e}")
+        except: pass
+        return
+
     root.mainloop()
 
 if __name__=="__main__":

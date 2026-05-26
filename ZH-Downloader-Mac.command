@@ -52,26 +52,43 @@ fi
 echo ""
 echo " [2/4] Checking dependencies..."
 
+need_install=0
 if [ ! -d ".venv" ]; then
-  echo " [!] First time setup — installing packages (1-2 min)..."
-  show_info "Setting up ZH Downloader for the first time. Please wait..."
-  
-  "$PY" -m venv .venv
-  if [ $? -ne 0 ]; then
-    show_dialog "Could not create Python environment.\nTry reinstalling Python from python.org." "OK"
-    exit 1
+  need_install=1
+else
+  # Re-install if requirements.txt newer than venv marker
+  if [ "requirements.txt" -nt ".venv/.installed" ] 2>/dev/null; then
+    need_install=1
+    echo " [!] requirements.txt updated — refreshing deps"
   fi
-  
+fi
+
+if [ "$need_install" = "1" ]; then
+  echo " [!] Setup — installing packages (1-3 min, larger first time)..."
+  show_info "Setting up ZH Downloader. Please wait..."
+
+  if [ ! -d ".venv" ]; then
+    "$PY" -m venv .venv
+    if [ $? -ne 0 ]; then
+      show_dialog "Could not create Python environment.\nTry reinstalling Python from python.org." "OK"
+      exit 1
+    fi
+  fi
+
   # shellcheck disable=SC1091
   source .venv/bin/activate
   pip install --quiet --upgrade pip
-  pip install --quiet -r requirements.txt
-  
+  # Core deps (must succeed)
+  pip install --quiet yt-dlp
   if [ $? -ne 0 ]; then
-    show_dialog "Package installation failed.\nCheck your internet connection and try again." "OK"
+    show_dialog "Failed to install yt-dlp (required).\nCheck your internet connection." "OK"
     exit 1
   fi
-  
+  # Optional deps (best effort — app degrades gracefully if any fail)
+  pip install --quiet Pillow tkinterdnd2 pystray 2>/dev/null || true
+  # macOS tray needs PyObjC
+  pip install --quiet "pyobjc-framework-Cocoa>=10.0" "pyobjc-framework-Quartz>=10.0" 2>/dev/null || true
+  touch .venv/.installed
   echo " [OK] Packages installed!"
 else
   # shellcheck disable=SC1091
