@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.3.6"
+APP_VER     = "5.3.7"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1896,13 +1896,21 @@ class App:
             item.status="error"
             self._mq.put(("item_up",item))
 
+    def _ffprobe_path(self):
+        """Locate ffprobe binary same way as find_ff but for probe."""
+        p = shutil.which("ffprobe") or shutil.which("ffprobe.exe")
+        if p and Path(p).exists(): return p
+        if self.ff:
+            d = Path(self.ff).parent
+            for n in ("ffprobe.exe", "ffprobe"):
+                cand = d / n
+                if cand.exists(): return str(cand)
+        return None
+
     def _ffprobe_duration(self, path):
         """Get duration in seconds via ffprobe, None if unavailable."""
         try:
-            ffprobe = shutil.which("ffprobe")
-            if not ffprobe and self.ff:
-                cand = Path(self.ff).parent / "ffprobe"
-                if cand.exists(): ffprobe = str(cand)
+            ffprobe = self._ffprobe_path()
             if not ffprobe: return None
             r = subprocess.run([ffprobe, "-v","error","-show_entries","format=duration",
                                 "-of","default=noprint_wrappers=1:nokey=1", str(path)],
@@ -1910,8 +1918,32 @@ class App:
             return float((r.stdout or "0").strip() or 0) or None
         except Exception: return None
 
+    def _ffprobe_codecs(self, path):
+        """Return (video_codec, audio_codec, pix_fmt) lowercase. Empty if unknown."""
+        try:
+            ffprobe = self._ffprobe_path()
+            if not ffprobe: return ("","","")
+            r = subprocess.run([ffprobe, "-v","error",
+                                "-show_entries","stream=codec_name,codec_type,pix_fmt",
+                                "-of","default=noprint_wrappers=1", str(path)],
+                               capture_output=True, text=True, timeout=10)
+            out = (r.stdout or "").lower()
+            vcodec, acodec, pix = "", "", ""
+            blocks = out.split("codec_type=")
+            for b in blocks:
+                if b.startswith("video"):
+                    for line in b.splitlines():
+                        if line.startswith("codec_name="): vcodec = line.split("=",1)[1].strip()
+                        elif line.startswith("pix_fmt="):  pix    = line.split("=",1)[1].strip()
+                elif b.startswith("audio"):
+                    for line in b.splitlines():
+                        if line.startswith("codec_name="): acodec = line.split("=",1)[1].strip()
+            return (vcodec, acodec, pix)
+        except Exception: return ("","","")
+
     def _force_h264_if_needed(self, item):
-        """ALWAYS re-encode to H.264+AAC MP4 with live progress in UI."""
+        """Smart: fast remux if already H.264+AAC, else full re-encode.
+        Most YouTube/Artgrid files are already h264 → 5s remux vs minutes transcode."""
         try:
             p = Path(item.done_f)
             if not p.exists():
@@ -1919,8 +1951,17 @@ class App:
                 return
             if p.suffix.lower() not in (".mp4",".mkv",".mov",".webm",".ts",".m4v",".avi"):
                 return
+
+            # Probe codec first — decide fast remux vs full re-encode
+            vcodec, acodec, pix = self._ffprobe_codecs(p)
             duration = self._ffprobe_duration(p) or 0
-            self.log(f"[transcode] {p.name} → H.264+AAC MP4 ({duration:.0f}s source)...")
+
+            # Fast path: source already H.264 + AAC + yuv420p → just remux for faststart
+            if vcodec in ("h264","avc1") and acodec in ("aac",) and pix in ("yuv420p",""):
+                self._fast_remux(item, p, duration)
+                return
+
+            self.log(f"[transcode] {p.name}: {vcodec}/{acodec} → H.264+AAC ({duration:.0f}s)...")
             item.pct = 0
             item.status = "downloading"
             self._mq.put(("status", f"[{item.idx}/{item.total}] Transcoding to H.264..."))
@@ -1932,10 +1973,9 @@ class App:
                    "-fflags","+genpts+igndts",
                    "-i", str(p),
                    "-map","0:v:0?","-map","0:a:0?",
-                   # Video — H.264 high profile, visually lossless
+                   # Video — H.264 high profile, fast preset (high quality, 3-4x faster than slow)
                    "-c:v","libx264","-profile:v","high","-level","5.1",
-                   "-preset","slow","-crf","14","-pix_fmt","yuv420p",
-                   "-x264-params","ref=4:bframes=4",
+                   "-preset","fast","-crf","18","-pix_fmt","yuv420p",
                    # Audio — AAC stereo 48kHz, async filter to fix drift
                    "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
                    "-af","aresample=async=1000:min_hard_comp=0.100:first_pts=0",
@@ -1995,6 +2035,72 @@ class App:
                 tmp.unlink(missing_ok=True)
         except Exception as e:
             self.log(f"[warn] force h264 skipped: {e}")
+
+    def _fast_remux(self, item, p, duration):
+        """Fast remux — source already H.264+AAC. Just ensure MP4 + faststart + avc1 tag.
+        ~5 seconds vs minutes of re-encode. Quality identical (stream copy)."""
+        try:
+            # If already .mp4 with faststart, skip entirely
+            if p.suffix.lower() == ".mp4":
+                # Check if already has faststart — quick heuristic: file starts with ftyp+moov
+                try:
+                    with open(p, "rb") as f:
+                        head = f.read(64)
+                    if b"moov" in head[:64]:
+                        self.log(f"[ok] {p.name} already Premiere-ready (no remux needed)")
+                        return
+                except Exception: pass
+
+            self.log(f"[remux] {p.name} → MP4+faststart (fast, no quality loss)...")
+            item.pct = 0
+            item.status = "downloading"
+            self._mq.put(("status", f"[{item.idx}/{item.total}] Remuxing..."))
+            self._mq.put(("item_up", item))
+
+            tmp = p.parent / (p.stem + ".remux_tmp.mp4")
+            cmd = [self.ff, "-y", "-progress","pipe:2","-nostats",
+                   "-i", str(p),
+                   "-map","0:v:0?","-map","0:a:0?",
+                   "-c:v","copy","-c:a","copy",
+                   "-movflags","+faststart","-tag:v","avc1",
+                   str(tmp)]
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+            last_pct = -1
+            tail = []
+            for line in proc.stderr:
+                tail.append(line)
+                if len(tail) > 30: tail = tail[-30:]
+                if self._stop.is_set():
+                    proc.terminate(); break
+                if line.startswith("out_time_us=") and duration > 0:
+                    try:
+                        us = int(line.split("=",1)[1].strip())
+                        sec = us / 1_000_000.0
+                        pct = min(99.5, (sec / duration) * 100)
+                        if int(pct) != last_pct:
+                            last_pct = int(pct)
+                            item.pct = pct
+                            self._mq.put(("item_up", item))
+                            self._mq.put(("status",
+                                f"[{item.idx}/{item.total}] Remuxing {pct:.0f}%"))
+                    except: pass
+            rc = proc.wait()
+            if rc == 0 and tmp.exists() and tmp.stat().st_size > 0:
+                final = p.with_suffix(".mp4")
+                p.unlink(missing_ok=True)
+                tmp.rename(final)
+                item.done_f = str(final)
+                item.name = final.name
+                item.pct = 100
+                self._mq.put(("item_up", item))
+                self.log(f"[done] {final.name}")
+            else:
+                err = "".join(tail)[-200:]
+                self.log(f"[warn] remux failed (rc={rc}): {err}")
+                tmp.unlink(missing_ok=True)
+        except Exception as e:
+            self.log(f"[warn] fast remux skipped: {e}")
 
     def _extract_slug_from_url(self, url, uuid_pat, generic_skip):
         import re as _re2, urllib.parse as _up
