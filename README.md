@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-5.0.0-d4a13a?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-5.1.0-d4a13a?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-5b1a1f?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square" alt="python">
   <img src="https://github.com/zhmotionspanel-cmyk/ZHDownloader-v4/actions/workflows/build-win.yml/badge.svg" alt="build">
@@ -33,7 +33,10 @@
 ## Features
 
 - **1800+ sites** — YouTube, Vimeo, Instagram, TikTok, Twitter/X, Facebook, Twitch, SoundCloud, Bilibili and more
-- **Concurrent downloads** — configurable 1-5 parallel (v5)
+- **Concurrent downloads** — configurable 1-5 parallel
+- **Drag-drop URLs** — drop links from any browser tab onto the window (v5.1)
+- **Tray icon** — minimize to tray, control from menu (v5.1)
+- **Card thumbnails** — visual preview for queue items (v5.1)
 - **Tabbed UI** — Downloads / History / Stats / Settings
 - **4 themes** — Sunset, Midnight, Forest, Mono
 - **Download history** — persistent across sessions, search + re-download
@@ -151,8 +154,8 @@ Find files under **Actions → latest run → Artifacts**.
 
 To create a release with all files attached:
 ```bash
-git tag v5.0.0
-git push origin v5.0.0
+git tag v5.1.0
+git push origin v5.1.0
 ```
 
 ---

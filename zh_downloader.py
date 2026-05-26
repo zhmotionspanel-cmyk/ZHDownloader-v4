@@ -1,7 +1,8 @@
 """
-ZH Downloader v5.0 - Universal Download Manager by ZH Motions
+ZH Downloader v5.1 - Universal Download Manager by ZH Motions
 IDM-class features: tabs, concurrent downloads, history, stats, themes,
-categories, speed limit, conflict dialog, completion actions.
+categories, speed limit, conflict dialog, completion actions,
+drag-drop URLs, tray icon, card thumbnails.
 """
 
 import os, sys, threading, queue as Q, json, subprocess, shutil, platform
@@ -17,9 +18,28 @@ try:
 except ImportError:
     print("Run: pip install -r requirements.txt"); sys.exit(1)
 
+# Optional deps (degrade gracefully if missing)
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+try:
+    from tkinterdnd2 import TkinterDnD, DND_TEXT, DND_FILES
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
+
+try:
+    import pystray
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
+
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.0.0"
+APP_VER     = "5.1.0"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -463,6 +483,10 @@ class App:
         self._poll_clip()
         self._start_bridge()
         self._check_resume()
+        self._setup_tray()
+
+        # Intercept window close to minimize-to-tray (if available)
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if not self.ff:
             self.log("[warn] ffmpeg not found - HD merge/audio extract may fail\n"
@@ -576,6 +600,14 @@ class App:
         self.url_box.pack(side="left", fill="x", expand=True)
         self.url_box.bind("<Command-v>", lambda e: self.root.after(100, self._on_paste))
         self.url_box.bind("<Control-v>", lambda e: self.root.after(100, self._on_paste))
+
+        # Drag-drop URLs (text or files) onto url_box
+        if HAS_DND:
+            try:
+                self.url_box.drop_target_register(DND_TEXT, DND_FILES)
+                self.url_box.dnd_bind("<<Drop>>", self._on_dnd_drop)
+            except Exception as e:
+                pass
 
         # Tabs
         self.nb = ttk.Notebook(self.root)
@@ -1074,12 +1106,25 @@ class App:
         # Left: status icon
         ico = tk.Label(inner, text="⏳", bg=T["SURF"], fg=T["MUTED"],
                        font=("Helvetica",16), width=2)
-        ico.grid(row=0, column=0, rowspan=2, padx=(6,10), pady=4)
+        ico.grid(row=0, column=0, rowspan=2, padx=(6,6), pady=4)
+
+        # Thumbnail placeholder (PIL only)
+        thumb = None
+        if HAS_PIL:
+            thumb = tk.Label(inner, bg=T["SURF2"], width=8, height=3,
+                             text="", relief="flat")
+            thumb.grid(row=0, column=1, rowspan=2, padx=(0,10), pady=2)
+            # async fetch thumbnail
+            threading.Thread(target=self._fetch_thumb,
+                             args=(item, thumb), daemon=True).start()
+            mid_col = 2
+        else:
+            mid_col = 1
 
         # Middle: badge + name + meta + progress
         mid = tk.Frame(inner, bg=T["SURF"])
-        mid.grid(row=0, column=1, sticky="ew", pady=2)
-        inner.columnconfigure(1, weight=1)
+        mid.grid(row=0, column=mid_col, sticky="ew", pady=2)
+        inner.columnconfigure(mid_col, weight=1)
 
         cat = categorize(item.name)
         badge = tk.Label(mid, text=f" {item.badge} ", bg=T["MAROON"], fg=T["ACCENT"],
@@ -1097,24 +1142,72 @@ class App:
 
         meta = tk.Label(inner, text="Waiting...", bg=T["SURF"], fg=T["MUTED"],
                         font=("Helvetica",9), anchor="w")
-        meta.grid(row=1, column=1, sticky="ew", pady=(2,4))
+        meta.grid(row=1, column=mid_col, sticky="ew", pady=(2,4))
 
         prog = ttk.Progressbar(inner, mode="determinate", maximum=100, length=220)
-        prog.grid(row=0, column=2, rowspan=2, padx=(8,10), sticky="e")
+        prog.grid(row=0, column=mid_col+1, rowspan=2, padx=(8,10), sticky="e")
         prog["value"] = item.pct
 
         # Right: per-item action menu
         act = tk.Frame(inner, bg=T["SURF"])
-        act.grid(row=0, column=3, rowspan=2, padx=(0,6))
+        act.grid(row=0, column=mid_col+2, rowspan=2, padx=(0,6))
         ttk.Button(act, text="✕", style="Ghost.TButton",
                    command=lambda i=item: self._remove_item(i),
                    width=2).pack()
 
         self._row_widgets[item.id] = {
-            "card":card,"icon":ico,"name":name,"meta":meta,"prog":prog,
+            "card":card,"icon":ico,"name":name,"meta":meta,"prog":prog,"thumb":thumb,
         }
         item.row = card
         item._lbl_icon = ico; item._lbl_name = name; item._lbl_meta = meta; item._prog = prog
+
+    def _fetch_thumb(self, item, label):
+        """Async fetch + display thumbnail for queue card. PIL only."""
+        if not HAS_PIL: return
+        THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+        # Cache key
+        import hashlib
+        key = hashlib.md5(item.url.encode()).hexdigest()[:16]
+        cache = THUMBS_DIR / f"{key}.png"
+        try:
+            if not cache.exists():
+                # Try yt-dlp extract for thumbnail URL
+                thumb_url = None
+                try:
+                    opts = {"quiet":True,"no_warnings":True,"skip_download":True,
+                            "extract_flat":True,"socket_timeout":10}
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(item.url, download=False)
+                    if info:
+                        thumb_url = info.get("thumbnail") or (
+                            (info.get("thumbnails") or [{}])[-1].get("url"))
+                except Exception:
+                    pass
+                # Fallback: direct image URL?
+                if not thumb_url:
+                    u = item.url.lower()
+                    if any(u.endswith(e) for e in (".jpg",".jpeg",".png",".webp",".gif")):
+                        thumb_url = item.url
+                if not thumb_url: return
+                # Download thumbnail
+                req = urllib.request.Request(thumb_url, headers={
+                    "User-Agent":"Mozilla/5.0 ZHDownloader"
+                })
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = r.read()
+                cache.write_bytes(data)
+            # Load + resize
+            img = Image.open(cache).convert("RGB")
+            img.thumbnail((96, 54), Image.LANCZOS)
+            tk_img = ImageTk.PhotoImage(img)
+            # Apply on main thread
+            def apply():
+                if not label.winfo_exists(): return
+                label.configure(image=tk_img, width=96, height=54, text="")
+                label.image = tk_img  # keep ref
+            self.root.after(0, apply)
+        except Exception:
+            pass
 
     def _remove_item(self, item):
         if item.status == "downloading":
@@ -1197,6 +1290,43 @@ class App:
     def _on_paste(self):
         try: clip = self.root.clipboard_get().strip()
         except: return
+
+    def _on_dnd_drop(self, event):
+        """Handle dragged URLs or file paths dropped on URL box."""
+        raw = event.data or ""
+        # TkinterDnD wraps paths with braces if spaces present; strip
+        items = []
+        cur = ""
+        in_brace = False
+        for ch in raw:
+            if ch == "{": in_brace = True; continue
+            if ch == "}":
+                in_brace = False
+                if cur: items.append(cur); cur = ""
+                continue
+            if ch == " " and not in_brace:
+                if cur: items.append(cur); cur = ""
+                continue
+            cur += ch
+        if cur: items.append(cur)
+        # Convert local file paths to file:// URLs OR strip and keep as-is for http URLs
+        urls = []
+        for it in items:
+            it = it.strip()
+            if not it: continue
+            if URL_RE.match(it):
+                urls.append(it)
+            elif Path(it).exists():
+                self.log(f"[drop] local file ignored: {it}")
+        if not urls:
+            self.log("[drop] no valid URLs in drop")
+            return "break"
+        cur_txt = self.url_box.get("1.0","end").strip()
+        merged = (cur_txt + "\n" + "\n".join(urls)).strip() if cur_txt else "\n".join(urls)
+        self.url_box.delete("1.0","end")
+        self.url_box.insert("1.0", merged)
+        self.log(f"[drop] added {len(urls)} URL(s)")
+        return "break"
 
     # -- queue poll ---------------------------------------------------------
     def _poll(self):
@@ -1929,6 +2059,69 @@ class App:
                 subprocess.Popen(["notify-send",APP_NAME,f"{title}\n{body}"])
         except: pass
 
+    # -- tray icon ----------------------------------------------------------
+    def _setup_tray(self):
+        self.tray = None
+        if not HAS_TRAY or not HAS_PIL: return
+        try:
+            icon_path = self._r("AppIcon.ico") or self._r("AppIcon_512.png") or self._r("header-logo.png")
+            if not icon_path: return
+            img = Image.open(icon_path)
+            menu = pystray.Menu(
+                pystray.MenuItem("Show ZH Downloader", self._tray_show, default=True),
+                pystray.MenuItem("Pause all",          self._tray_pause),
+                pystray.MenuItem("Cancel all",         self._tray_cancel),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Open download folder", self._tray_open_folder),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Quit",               self._tray_quit),
+            )
+            self.tray = pystray.Icon(APP_NAME, img, APP_NAME, menu)
+            threading.Thread(target=self.tray.run, daemon=True).start()
+        except Exception as e:
+            self.log(f"[warn] tray icon unavailable: {e}")
+
+    def _tray_show(self, icon=None, item=None):
+        self.root.after(0, self._restore_window)
+
+    def _restore_window(self):
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after(50, lambda: self.root.attributes("-topmost", False))
+        except: pass
+
+    def _tray_pause(self, icon=None, item=None):
+        if self._is_running(): self.root.after(0, self._do_pause)
+
+    def _tray_cancel(self, icon=None, item=None):
+        if self._is_running(): self.root.after(0, self._do_cancel)
+
+    def _tray_open_folder(self, icon=None, item=None):
+        self.root.after(0, self._open_folder)
+
+    def _tray_quit(self, icon=None, item=None):
+        try:
+            if self.tray: self.tray.stop()
+        except: pass
+        self.root.after(0, self._real_quit)
+
+    def _real_quit(self):
+        try: self.root.destroy()
+        except: pass
+        os._exit(0)
+
+    def _on_close(self):
+        """Minimize-to-tray if tray available, else quit normally."""
+        if self.tray is not None:
+            try:
+                self.root.withdraw()
+                self.log("[tray] minimized to tray. Click tray icon to restore.")
+            except: pass
+        else:
+            self._real_quit()
+
 
 class _Log:
     def __init__(self,a): self.a=a
@@ -1941,7 +2134,11 @@ class _Log:
 
 
 def main():
-    root = tk.Tk()
+    # Drag-drop needs TkinterDnD root subclass
+    if HAS_DND:
+        root = TkinterDnD.Tk()
+    else:
+        root = tk.Tk()
     App(root)
     root.mainloop()
 
