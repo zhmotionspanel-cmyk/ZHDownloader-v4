@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.1.5"
+APP_VER     = "5.1.6"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -464,8 +464,17 @@ class Bridge(BaseHTTPRequestHandler):
 class App:
     def __init__(self, root):
         self.root      = root
+        # Auto-detect installed browser for cookies default
+        default_cookies = "chrome"
+        for browser, path in [("chrome", Path.home()/"Library/Application Support/Google/Chrome"),
+                              ("safari", Path.home()/"Library/Safari"),
+                              ("firefox", Path.home()/"Library/Application Support/Firefox"),
+                              ("edge",   Path.home()/"Library/Application Support/Microsoft Edge"),
+                              ("brave",  Path.home()/"Library/Application Support/BraveSoftware/Brave-Browser")]:
+            if path.exists(): default_cookies = browser; break
+
         self.cfg       = jload(CFG_PATH, {
-            "dir":DEFAULT_DIR, "fmt":"best_mp4", "cookies":"none", "clip":True,
+            "dir":DEFAULT_DIR, "fmt":"h264_best", "cookies":default_cookies, "clip":True,
             "theme":"Light", "concurrent":2, "rate_kbps":0, "categorize":False,
             "completion_sound":True, "shutdown_after":False, "conflict":"rename",
         })
@@ -1741,6 +1750,11 @@ class App:
         if rate > 0: opts["ratelimit"] = rate
         if self.ff: opts["ffmpeg_location"]=self.ff
         ck = self.ck_var.get()
+        # YouTube post-PoToken: HD/4K requires browser cookies. If user set none,
+        # auto-fallback to chrome (silently — if not installed, yt-dlp ignores).
+        if is_youtube and (not ck or ck == "none"):
+            ck = "chrome"
+            self.log("[info] YouTube needs cookies for HD — auto-using Chrome cookies")
         if ck and ck != "none":
             opts["cookiesfrombrowser"] = (ck,)
         if "merge" in f and not is_hls: opts["merge_output_format"]=f["merge"]
