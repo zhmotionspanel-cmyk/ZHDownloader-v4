@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.3.7"
+APP_VER     = "5.3.8"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1823,6 +1823,10 @@ class App:
             # Clean up intermediate format-specific files after merge
             "keepvideo":                  False,
             "keep_fragments":             False,
+            "clean_infojson":             True,
+            "writeinfojson":              False,
+            "writedescription":           False,
+            "writeannotations":           False,
         }
         if rate > 0: opts["ratelimit"] = rate
         if self.ff:
@@ -1881,6 +1885,9 @@ class App:
             # not H.264. Explicit ffmpeg pass guarantees avc1 output for editors.
             if self.ff and item.done_f and FMTS.get(fk,{}).get("pp_compat"):
                 self._force_h264_if_needed(item)
+            # Always clean intermediate format-id files (yt-dlp keepvideo not always honored)
+            if item.done_f:
+                self._cleanup_intermediates(item)
             if not self._stop.is_set():
                 item.status="done"; item.pct=100
                 self._mq.put(("item_up",item))
@@ -1940,6 +1947,31 @@ class App:
                         if line.startswith("codec_name="): acodec = line.split("=",1)[1].strip()
             return (vcodec, acodec, pix)
         except Exception: return ("","","")
+
+    def _cleanup_intermediates(self, item):
+        """Delete yt-dlp leftover intermediate files: .fNNN.*, .part, .ytdl, .description"""
+        try:
+            p = Path(item.done_f)
+            if not p.exists(): return
+            parent = p.parent
+            stem = p.stem
+            # Files matching <stem>.fNNN.<ext>, <stem>.part, <stem>.ytdl
+            import re as _re
+            for f in parent.iterdir():
+                if not f.is_file(): continue
+                if f == p: continue  # keep final file
+                n = f.name
+                # Match yt-dlp format-id suffix: foo.f137.mp4, foo.f140.m4a etc
+                if _re.search(r"\.f\d+\.(mp4|m4a|webm|mkv|mov)$", n, _re.I):
+                    if f.stem.rsplit(".f", 1)[0] == stem or n.startswith(stem):
+                        try: f.unlink(); self.log(f"[cleanup] removed {f.name}")
+                        except: pass
+                elif n.endswith(".part") or n.endswith(".ytdl") or n.endswith(".description"):
+                    if n.startswith(stem):
+                        try: f.unlink(); self.log(f"[cleanup] removed {f.name}")
+                        except: pass
+        except Exception as e:
+            self.log(f"[warn] cleanup failed: {e}")
 
     def _force_h264_if_needed(self, item):
         """Smart: fast remux if already H.264+AAC, else full re-encode.
