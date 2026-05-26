@@ -25,12 +25,16 @@ jobs:
       - name: Install WiX Toolset
         run: choco install wixtoolset -y --no-progress
 
-      - name: Locate ffmpeg
+      - name: Locate ffmpeg + ffprobe
         id: ffmpeg
         shell: pwsh
         run: |
           $ff = (Get-Command ffmpeg).Source
+          $fp = (Get-Command ffprobe).Source
           echo "path=$ff" >> $env:GITHUB_OUTPUT
+          echo "probe=$fp" >> $env:GITHUB_OUTPUT
+          echo "ffmpeg: $ff"
+          echo "ffprobe: $fp"
 
       - name: Install Python deps
         run: |
@@ -55,6 +59,7 @@ jobs:
             --icon "assets\AppIcon.ico" `
             --add-data "assets;assets" `
             --add-binary "${{ steps.ffmpeg.outputs.path }};." `
+            --add-binary "${{ steps.ffmpeg.outputs.probe }};." `
             --add-data "${{ steps.tkdnd.outputs.path }};tkinterdnd2/tkdnd" `
             --collect-all tkinterdnd2 `
             --collect-all pystray `
@@ -72,7 +77,7 @@ jobs:
           $env:Path = "$WIX;$env:Path"
           candle.exe -nologo -arch x64 `
             -dAppName="ZH Downloader" `
-            -dAppVersion="5.3.5" `
+            -dAppVersion="5.3.6" `
             -dAppAuthor="ZH Motions" `
             -dExePath="dist\ZHDownloader.exe" `
             -dIconPath="assets\AppIcon.ico" `
@@ -118,7 +123,10 @@ jobs:
       - name: Build .app
         run: |
           FFMPEG_BIN="$(command -v ffmpeg)"
+          FFPROBE_BIN="$(command -v ffprobe)"
           TKDND_PATH="$(python3.12 -c 'import tkinterdnd2, os; print(os.path.join(os.path.dirname(tkinterdnd2.__file__), "tkdnd"))')"
+          echo "ffmpeg: $FFMPEG_BIN"
+          echo "ffprobe: $FFPROBE_BIN"
           echo "tkdnd path: $TKDND_PATH"
           ls -la "$TKDND_PATH" || true
           python3.12 -m PyInstaller \
@@ -128,6 +136,7 @@ jobs:
             --icon "assets/AppIcon.icns" \
             --add-data "assets:assets" \
             --add-binary "$FFMPEG_BIN:." \
+            --add-binary "$FFPROBE_BIN:." \
             --add-data "$TKDND_PATH:tkinterdnd2/tkdnd" \
             --collect-all tkinterdnd2 \
             --collect-all pystray \
@@ -168,7 +177,7 @@ jobs:
           pkgbuild \
             --root "$PKG_ROOT" \
             --identifier "com.zhmotions.downloader" \
-            --version "5.3.5" \
+            --version "5.3.6" \
             --install-location "/" \
             "$COMP_DIR/component.pkg"
           cat > "$COMP_DIR/dist.xml" << 'DISTEOF'
@@ -180,13 +189,13 @@ jobs:
             <choices-outline><line choice="default"><line choice="com.zhmotions.downloader"/></line></choices-outline>
             <choice id="default"/>
             <choice id="com.zhmotions.downloader" visible="false"><pkg-ref id="com.zhmotions.downloader"/></choice>
-            <pkg-ref id="com.zhmotions.downloader" version="5.3.5" onConclusion="none">component.pkg</pkg-ref>
+            <pkg-ref id="com.zhmotions.downloader" version="5.3.6" onConclusion="none">component.pkg</pkg-ref>
           </installer-gui-script>
           DISTEOF
           productbuild \
             --distribution "$COMP_DIR/dist.xml" \
             --package-path "$COMP_DIR" \
-            --version "5.3.5" \
+            --version "5.3.6" \
             "ZHDownloader-macOS.pkg"
 
       - name: Upload DMG

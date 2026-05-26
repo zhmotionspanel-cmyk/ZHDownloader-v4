@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.3.5"
+APP_VER     = "5.3.6"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -137,11 +137,41 @@ def jsave(p, d):
     except: pass
 
 def find_ff():
-    p = shutil.which("ffmpeg")
-    if p: return p
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
-    for c in [base/"ffmpeg", base/"ffmpeg.exe"]:
-        if c.exists(): return str(c)
+    """Locate bundled ffmpeg binary. Search PATH, PyInstaller temp,
+    executable dir, common install locations. Required for HD merge."""
+    # 1. System PATH first
+    p = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    if p and Path(p).exists(): return p
+
+    # 2. PyInstaller temp dir (_MEIPASS for onefile, app bundle for macOS)
+    candidates = []
+    if hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        candidates += [meipass/"ffmpeg.exe", meipass/"ffmpeg",
+                       meipass/"bin"/"ffmpeg.exe", meipass/"bin"/"ffmpeg"]
+
+    # 3. Executable directory (next to the .exe)
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        candidates += [exe_dir/"ffmpeg.exe", exe_dir/"ffmpeg",
+                       exe_dir/"bin"/"ffmpeg.exe"]
+
+    # 4. Script directory (run from source)
+    here = Path(__file__).parent
+    candidates += [here/"ffmpeg.exe", here/"ffmpeg",
+                   here/"bin"/"ffmpeg.exe"]
+
+    # 5. Common Windows install paths
+    if platform.system() == "Windows":
+        candidates += [
+            Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
+            Path(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+            Path(r"C:\ProgramData\chocolatey\bin\ffmpeg.exe"),
+        ]
+
+    for c in candidates:
+        if c.exists():
+            return str(c)
     return None
 
 def res_path():
@@ -1795,7 +1825,9 @@ class App:
             "keep_fragments":             False,
         }
         if rate > 0: opts["ratelimit"] = rate
-        if self.ff: opts["ffmpeg_location"]=self.ff
+        if self.ff:
+            # Pass DIRECTORY so yt-dlp finds both ffmpeg + ffprobe
+            opts["ffmpeg_location"] = str(Path(self.ff).parent)
         ck = self.ck_var.get()
         if ck and ck != "none":
             opts["cookiesfrombrowser"] = (ck,)
