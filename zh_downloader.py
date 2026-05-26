@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.3.0"
+APP_VER     = "5.3.1"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -612,11 +612,16 @@ class App:
         self._dot.pack(side="right", padx=(0,10))
         self._concur_lbl = tk.Label(right, text="0/0 active", bg=T["HEADER"], fg=T["MUTED"], font=("Helvetica",9))
         self._concur_lbl.pack(side="right", padx=(0,14))
-        # About link in header
+        # About + Help links in header
         about = tk.Label(right, text="ⓘ About", bg=T["HEADER"], fg=T["ACCENT"],
                          font=("Helvetica",9,"underline"), cursor="hand2")
-        about.pack(side="right", padx=(0,14))
+        about.pack(side="right", padx=(0,10))
         about.bind("<Button-1>", lambda e: self._show_about())
+
+        help_lbl = tk.Label(right, text="? Help", bg=T["HEADER"], fg=T["ACCENT"],
+                            font=("Helvetica",9,"underline"), cursor="hand2")
+        help_lbl.pack(side="right", padx=(0,10))
+        help_lbl.bind("<Button-1>", lambda e: self._show_help())
 
         # Top toolbar (URL + add + drop-zone + global actions)
         bar = tk.Frame(self.root, bg=T["BG"])
@@ -2296,6 +2301,109 @@ class App:
         try: self.root.destroy()
         except: pass
         os._exit(0)
+
+    def _show_help(self):
+        """In-app help dialog with install guide + FAQ for students."""
+        d = tk.Toplevel(self.root)
+        d.title("Help — ZH Downloader")
+        d.geometry("680x600"); d.configure(bg=T["BG"])
+        try: d.transient(self.root)
+        except: pass
+
+        # Header
+        h = tk.Frame(d, bg=T["HEADER"], height=54); h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text="📖  ZH Downloader — Quick Help", bg=T["HEADER"], fg=T["ACCENT"],
+                 font=("Helvetica",14,"bold")).pack(side="left", padx=18, pady=14)
+        tk.Frame(d, bg=T["BORDER"], height=1).pack(fill="x")
+
+        # Body — scrollable text
+        body = tk.Frame(d, bg=T["BG"]); body.pack(fill="both", expand=True, padx=18, pady=14)
+        txt = tk.Text(body, font=("Helvetica",10), bg=T["SURF"], fg=T["TEXT"],
+                      relief="flat", padx=14, pady=10, wrap="word")
+        txt.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(body, command=txt.yview); sb.pack(side="right", fill="y")
+        txt.configure(yscrollcommand=sb.set)
+
+        for tag, col, font in [("h1", T["ACCENT"], ("Helvetica",13,"bold")),
+                                ("h2", T["TEXT"],   ("Helvetica",11,"bold")),
+                                ("b",  T["TEXT"],   ("Helvetica",10,"bold")),
+                                ("dim",T["MUTED"],  ("Helvetica",9))]:
+            txt.tag_configure(tag, foreground=col, font=font)
+
+        sections = [
+            ("h1", "Quick Start"),
+            ("",   "1. Set Cookies to chrome (top of Downloads tab) for HD quality\n"
+                   "2. Pick Format: 4K or HD\n"
+                   "3. Paste video URL\n"
+                   "4. Click Download\n\n"),
+            ("h1", "Getting HD/4K downloads"),
+            ("h2", "YouTube"),
+            ("",   "• Open Chrome → login to YouTube (your Gmail)\n"
+                   "• In app: Cookies dropdown → chrome\n"
+                   "• Without cookies = max 720p; with cookies = up to 4K\n\n"),
+            ("h2", "Artgrid / Artlist (subscription sites)"),
+            ("",   "• Active subscription required\n"
+                   "• Login in Chrome\n"
+                   "• Cookies dropdown → chrome\n"
+                   "• Use clip page URL, not preview .m3u8\n\n"),
+            ("h1", "Premiere Pro compatibility"),
+            ("",   "• Format 4K / HD auto-transcodes to H.264 + AAC MP4\n"
+                   "• Drag .mp4 into Premiere — opens without re-encoding\n"
+                   "• Codec: avc1 high profile, level 5.1, yuv420p\n\n"),
+            ("h1", "Browser extension"),
+            ("",   "1. Chrome → chrome://extensions/\n"
+                   "2. Enable Developer mode (top right)\n"
+                   "3. Load unpacked → select extension/ folder\n"
+                   "4. Pin the ZH icon\n"
+                   "5. On video pages, click floating button bottom-right\n\n"),
+            ("h1", "Three ways to download"),
+            ("",   "A. Paste URL in box → Download button\n"
+                   "B. Browser extension floating button\n"
+                   "C. Watch clipboard — copy URL, app auto-adds\n\n"),
+            ("h1", "Troubleshooting"),
+            ("b",  "App won't open on Mac:\n"),
+            ("",   "Right-click .app in Applications → Open → Open Anyway\n\n"),
+            ("b",  "Downloads at 360p:\n"),
+            ("",   "Cookies = chrome + login YouTube in Chrome\n\n"),
+            ("b",  "Premiere won't import:\n"),
+            ("",   "Use format 4K or HD (not Audio MP3) — auto-transcodes\n\n"),
+            ("b",  "App crashes:\n"),
+            ("",   "Delete ~/.zhdownloader.json and relaunch\n\n"),
+            ("b",  "Browser button missing:\n"),
+            ("",   "Visit a video page, wait 2 seconds, button appears\n\n"),
+            ("h1", "Settings"),
+            ("",   "• Theme: Light/Cream/Sunset/Midnight/Forest/Mono Dark\n"
+                   "• Concurrent downloads: 1-5 parallel\n"
+                   "• Speed limit: KB/s throttle\n"
+                   "• Auto-categorize: organize to Video/Audio folders\n"
+                   "• Conflict: rename / overwrite / skip / ask\n\n"),
+            ("h1", "Need more help?"),
+            ("",   "Ask in your cohort Discord / WhatsApp group.\n"
+                   "Bug reports: screenshot + send to instructor.\n\n"),
+            ("dim", "ZH Motions © 2026 — Internal student use only.\n"
+                    f"Version: {APP_VER}"),
+        ]
+        for tag, text in sections:
+            if tag: txt.insert("end", text+"\n", tag)
+            else:   txt.insert("end", text)
+        txt.configure(state="disabled")
+
+        # Footer
+        ftr = tk.Frame(d, bg=T["BG"]); ftr.pack(fill="x", padx=18, pady=(0,14))
+        ttk.Button(ftr, text="Open Online Guide", style="Ghost.TButton",
+                   command=lambda: self._open_url(
+                       "https://github.com/zhmotionspanel-cmyk/ZHDownloader-v4/blob/main/INSTALL-STUDENTS.md"
+                   )).pack(side="left", padx=(0,8))
+        ttk.Button(ftr, text="Close", style="Main.TButton",
+                   command=d.destroy).pack(side="right")
+
+    def _open_url(self, url):
+        try:
+            if   platform.system()=="Darwin":  subprocess.Popen(["open", url])
+            elif platform.system()=="Windows": subprocess.Popen(["cmd","/c","start",url], shell=False)
+            else:                              subprocess.Popen(["xdg-open", url])
+        except Exception as e:
+            self.log(f"[warn] open url failed: {e}")
 
     def _show_about(self):
         """About dialog — branding for ZH Motions students distribution."""
