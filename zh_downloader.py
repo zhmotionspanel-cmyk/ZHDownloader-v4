@@ -1057,12 +1057,17 @@ class App:
             "postprocessor_hooks":        [pp_hook],
             "logger":                     _Log(self),
             "no_warnings":                False,
+            # YouTube nerfed android/web clients (no HD without PoToken).
+            # tv_embedded + mweb + web_safari currently serve HD without auth.
             "extractor_args":             {
                 "youtube": {
-                    "player_client": ["web", "android", "ios"],
+                    "player_client": ["tv_embedded", "mweb", "web_safari", "ios", "android"],
+                    "max_comments": ["0"],
                 },
             },
             "youtube_include_dash_manifest": True,
+            # Prefer highest resolution first, then h264, then aac
+            "format_sort":                ["res", "fps", "vcodec:h264", "acodec:aac", "size", "br"],
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -1112,7 +1117,8 @@ class App:
         if f.get("pp_compat") and self.ff:
             opts["merge_output_format"] = "mp4"
             opts["final_ext"] = "mp4"
-            opts["format_sort"] = ["vcodec:h264", "acodec:aac", "ext:mp4:m4a", "res", "br"]
+            # res first so 4K VP9 picked over 1080p H264, then prefer h264 within same res
+            opts["format_sort"] = ["res", "fps", "vcodec:h264", "acodec:aac", "ext:mp4:m4a", "br"]
             # recode_video forces re-encode (overrides copy mode)
             opts["postprocessors"] = [
                 {"key":"FFmpegVideoConvertor","preferedformat":"mp4"},
@@ -1149,6 +1155,14 @@ class App:
             item.status="downloading"
             self._mq.put(("item_up",item))
             self.log(f"\n[{i+1}/{total}] {url[:100]}")
+
+            # Warn about quality-locked sites without cookies
+            ul = url.lower()
+            if self.ck_var.get() == "none" and any(h in ul for h in ("artgrid","artlist","patreon","cms-public.artgrid")):
+                self.log("[warn] Artgrid/Artlist/Patreon requires browser login for full quality.")
+                self.log("[warn] Set Cookies dropdown to your browser (chrome/safari/etc) and re-login on the site.")
+            if any(h in ul for h in ("youtube.com","youtu.be")) and self.ck_var.get() == "none":
+                self.log("[info] YouTube: cookies recommended for 1080p+ and member content.")
 
             mode = self.mode_var.get().split(":")[0].strip()
             kind = classify(url) if mode=="auto" else mode
