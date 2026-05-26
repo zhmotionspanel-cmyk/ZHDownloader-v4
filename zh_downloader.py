@@ -33,13 +33,16 @@ except ImportError:
 
 try:
     import pystray
-    HAS_TRAY = True
+    # pystray on macOS calls [NSApplication run] from a background thread which
+    # conflicts with Tkinter's main-thread NSApplication and crashes via
+    # "NSUpdateCycleInitialize called off the main thread". Disable on Darwin.
+    HAS_TRAY = (platform.system() != "Darwin")
 except ImportError:
     HAS_TRAY = False
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.1.3"
+APP_VER     = "5.1.4"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
