@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.3.2"
+APP_VER     = "5.3.3"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -2401,7 +2401,7 @@ class App:
         ftr = tk.Frame(d, bg=T["BG"]); ftr.pack(fill="x", padx=18, pady=(0,14))
         ttk.Button(ftr, text="Open Online Guide", style="Ghost.TButton",
                    command=lambda: self._open_url(
-                       "https://github.com/zhmotionspanel-cmyk/ZHDownloader-v4/blob/main/INSTALL-STUDENTS.md"
+                       "https://github.com/zhmotionspanel-cmyk/ZHDownloader-v4/blob/main/student-pack/INSTALL-STUDENTS.md"
                    )).pack(side="left", padx=(0,8))
         ttk.Button(ftr, text="Close", style="Ghost.TButton",
                    command=d.destroy).pack(side="right")
