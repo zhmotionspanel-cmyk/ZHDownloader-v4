@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.3"
+APP_VER     = "5.2.4"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1756,6 +1756,9 @@ class App:
             "concurrent_fragment_downloads": 4,
             "continuedl":                 True,
             "noprogress":                 False,
+            # Clean up intermediate format-specific files after merge
+            "keepvideo":                  False,
+            "keep_fragments":             False,
         }
         if rate > 0: opts["ratelimit"] = rate
         if self.ff: opts["ffmpeg_location"]=self.ff
@@ -1887,12 +1890,20 @@ class App:
             tmp = p.parent / (p.stem + ".h264_tmp.mp4")
             cmd = [self.ff, "-y",
                    "-progress", "pipe:2", "-nostats",
+                   "-fflags","+genpts+igndts",
                    "-i", str(p),
                    "-map","0:v:0?","-map","0:a:0?",
+                   # Video — H.264 high profile, visually lossless
                    "-c:v","libx264","-profile:v","high","-level","5.1",
                    "-preset","slow","-crf","14","-pix_fmt","yuv420p",
                    "-x264-params","ref=4:bframes=4",
+                   # Audio — AAC stereo 48kHz, async filter to fix drift
                    "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
+                   "-af","aresample=async=1000:min_hard_comp=0.100:first_pts=0",
+                   # A/V sync — handle VFR sources + HLS negative timestamps
+                   "-fps_mode","cfr",
+                   "-avoid_negative_ts","make_zero",
+                   # Container
                    "-movflags","+faststart","-tag:v","avc1",
                    "-max_muxing_queue_size","1024",
                    str(tmp)]
