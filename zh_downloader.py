@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.8"
+APP_VER     = "5.3.0"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -604,7 +604,7 @@ class App:
         tx = tk.Frame(hi, bg=T["HEADER"]); tx.pack(side="left")
         tk.Label(tx, text=APP_NAME, bg=T["HEADER"], fg=T["ACCENT"],
                  font=("Helvetica",15,"bold")).pack(anchor="w")
-        tk.Label(tx, text=f"v{APP_VER}  ·  {APP_AUTHOR}",
+        tk.Label(tx, text=f"v{APP_VER}  ·  Licensed to ZH Motions Students",
                  bg=T["HEADER"], fg=T["MUTED"], font=("Helvetica",9)).pack(anchor="w")
         # Right side info pills
         right = tk.Frame(hi, bg=T["HEADER"]); right.pack(side="right")
@@ -612,6 +612,11 @@ class App:
         self._dot.pack(side="right", padx=(0,10))
         self._concur_lbl = tk.Label(right, text="0/0 active", bg=T["HEADER"], fg=T["MUTED"], font=("Helvetica",9))
         self._concur_lbl.pack(side="right", padx=(0,14))
+        # About link in header
+        about = tk.Label(right, text="ⓘ About", bg=T["HEADER"], fg=T["ACCENT"],
+                         font=("Helvetica",9,"underline"), cursor="hand2")
+        about.pack(side="right", padx=(0,14))
+        about.bind("<Button-1>", lambda e: self._show_about())
 
         # Top toolbar (URL + add + drop-zone + global actions)
         bar = tk.Frame(self.root, bg=T["BG"])
@@ -2291,6 +2296,66 @@ class App:
         try: self.root.destroy()
         except: pass
         os._exit(0)
+
+    def _show_about(self):
+        """About dialog — branding for ZH Motions students distribution."""
+        d = tk.Toplevel(self.root)
+        d.title("About")
+        d.geometry("440x540"); d.configure(bg=T["BG"]); d.resizable(False, False)
+        try: d.transient(self.root); d.grab_set()
+        except: pass
+
+        # Logo
+        lp = self._r("AppIcon_512.png") or self._r("header-logo.png")
+        if lp:
+            try:
+                img = tk.PhotoImage(file=lp)
+                # Resize down by subsample
+                img = img.subsample(max(1, img.width()//120), max(1, img.height()//120))
+                lbl = tk.Label(d, image=img, bg=T["BG"])
+                lbl.image = img
+                lbl.pack(pady=(20,10))
+            except: pass
+
+        tk.Label(d, text=APP_NAME, bg=T["BG"], fg=T["ACCENT"],
+                 font=("Helvetica",20,"bold")).pack()
+        tk.Label(d, text=f"Version {APP_VER}", bg=T["BG"], fg=T["MUTED"],
+                 font=("Helvetica",10)).pack(pady=(2,14))
+
+        # Branding box
+        box = tk.Frame(d, bg=T["SURF"], padx=20, pady=14)
+        box.pack(fill="x", padx=24, pady=8)
+        tk.Label(box, text="🎓  Licensed to ZH Motions Students",
+                 bg=T["SURF"], fg=T["ACCENT"], font=("Helvetica",11,"bold")).pack(anchor="w")
+        tk.Label(box, text="Internal use only — do not redistribute outside the program.",
+                 bg=T["SURF"], fg=T["MUTED"], font=("Helvetica",9), wraplength=360,
+                 justify="left").pack(anchor="w", pady=(4,0))
+
+        # Credits
+        cred = tk.Frame(d, bg=T["BG"]); cred.pack(fill="x", padx=24, pady=14)
+        tk.Label(cred, text="Built by ZH Motions", bg=T["BG"], fg=T["TEXT"],
+                 font=("Helvetica",10,"bold")).pack(anchor="w")
+        tk.Label(cred, text="zhmotions.com", bg=T["BG"], fg=T["ACCENT"],
+                 font=("Helvetica",9,"underline"), cursor="hand2"
+                 ).pack(anchor="w").bind("<Button-1>",
+                 lambda e: subprocess.Popen(["open", APP_URL]) if platform.system()=="Darwin"
+                 else subprocess.Popen(["xdg-open", APP_URL])) if False else None
+
+        # 3rd party credits
+        legal = tk.Frame(d, bg=T["BG"]); legal.pack(fill="x", padx=24, pady=(4,8))
+        tk.Label(legal, text="Powered by:", bg=T["BG"], fg=T["MUTED"],
+                 font=("Helvetica",9,"bold")).pack(anchor="w")
+        for tool, lic in [("yt-dlp", "Unlicense / public domain"),
+                          ("Pillow (PIL)", "HPND License"),
+                          ("tkinterdnd2", "MIT License"),
+                          ("pystray", "LGPL-3.0"),
+                          ("ffmpeg", "LGPL-2.1+")]:
+            tk.Label(legal, text=f"  • {tool} — {lic}", bg=T["BG"], fg=T["MUTED"],
+                     font=("Helvetica",8)).pack(anchor="w")
+
+        # Close
+        ttk.Button(d, text="Close", style="Main.TButton",
+                   command=d.destroy).pack(pady=(14,18))
 
     def _on_close(self):
         """Minimize-to-tray if tray available, else quit normally."""
