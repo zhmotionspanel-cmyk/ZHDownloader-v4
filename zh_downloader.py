@@ -42,7 +42,7 @@ except ImportError:
 
 # -- Constants --------------------------------------------------------------
 APP_NAME    = "ZH Downloader"
-APP_VER     = "5.2.4"
+APP_VER     = "5.2.5"
 APP_AUTHOR  = "ZH Motions"
 APP_URL     = "https://zhmotions.com"
 BRIDGE_PORT = 9613
@@ -1768,47 +1768,20 @@ class App:
         # YouTube post-PoToken warning (don't force chrome — may fail if Chrome closed/locked)
         if is_youtube and (not ck or ck == "none"):
             self.log("[warn] YouTube HD/4K needs browser cookies. Set Cookies dropdown → chrome for 1080p+")
+        # Merge output format (yt-dlp Merger uses -c copy — fast, no quality loss)
         if "merge" in f and not is_hls: opts["merge_output_format"]=f["merge"]
         if is_hls:
             opts["merge_output_format"] = "mp4"
             opts["final_ext"] = "mp4"
-            if self.ff:
-                opts["postprocessors"] = [{"key":"FFmpegVideoConvertor","preferedformat":"mp4"}]
-                # HLS transcode: high quality, slow preset for best compression efficiency
-                # crf 14 ≈ visually lossless. Slower preset = better quality per bitrate.
-                _hls_args = [
-                    "-c:v","libx264","-profile:v","high","-level","5.1",
-                    "-preset","slow","-crf","14","-pix_fmt","yuv420p",
-                    "-x264-params","ref=4:bframes=4",
-                    "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
-                    "-movflags","+faststart","-tag:v","avc1",
-                ]
-                opts["postprocessor_args"] = {
-                    "videoconvertor": _hls_args,
-                    "ffmpeg_o1": _hls_args,
-                    "ffmpeg": _hls_args,
-                }
         if "audio" in f:
             opts["postprocessors"]=[{"key":"FFmpegExtractAudio",
                                      "preferredcodec":f["audio"],"preferredquality":"0"}]
+        # For pp_compat: skip yt-dlp's VideoConvertor (caused hangs + triple processing).
+        # _force_h264_if_needed runs single explicit ffmpeg pass after yt-dlp completes.
         if f.get("pp_compat") and self.ff:
             opts["merge_output_format"] = "mp4"
             opts["final_ext"] = "mp4"
             opts["format_sort"] = ["res", "fps", "vcodec:h264", "acodec:aac", "ext:mp4:m4a", "br"]
-            opts["postprocessors"] = [{"key":"FFmpegVideoConvertor","preferedformat":"mp4"}]
-            # Premiere Pro transcode: visually lossless, slow preset for editing
-            _pp_args = [
-                "-c:v","libx264","-profile:v","high","-level","5.1",
-                "-preset","slow","-crf","14","-pix_fmt","yuv420p",
-                "-x264-params","ref=4:bframes=4",
-                "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
-                "-movflags","+faststart","-tag:v","avc1",
-            ]
-            opts["postprocessor_args"] = {
-                "videoconvertor": _pp_args,
-                "ffmpeg_o1": _pp_args,
-                "ffmpeg": _pp_args,
-            }
         return opts
 
     # -- video / file runners ----------------------------------------------
@@ -1900,8 +1873,8 @@ class App:
                    # Audio — AAC stereo 48kHz, async filter to fix drift
                    "-c:a","aac","-b:a","320k","-ar","48000","-ac","2",
                    "-af","aresample=async=1000:min_hard_comp=0.100:first_pts=0",
-                   # A/V sync — handle VFR sources + HLS negative timestamps
-                   "-fps_mode","cfr",
+                   # A/V sync — VFR passthrough, fix HLS negative timestamps
+                   "-fps_mode","vfr",
                    "-avoid_negative_ts","make_zero",
                    # Container
                    "-movflags","+faststart","-tag:v","avc1",
